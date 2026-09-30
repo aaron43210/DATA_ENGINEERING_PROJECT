@@ -40,7 +40,7 @@ def execute_gx_checkpoint(checkpoint_name: str, dataset_name: str, suite_name: s
         logger.error("PRODUCTION ERROR: great_expectations library not installed.")
         raise
         
-    context_root_dir = "/opt/airflow/dags/data_quality"
+    context_root_dir = "/opt/airflow/dags/data_quality/gx"
     
     if not os.path.exists(context_root_dir) or not os.path.exists(os.path.join(context_root_dir, "great_expectations.yml")):
         raise FileNotFoundError(f"PRODUCTION ERROR: Great Expectations context not initialized at {context_root_dir}. Please run 'gx init'.")
