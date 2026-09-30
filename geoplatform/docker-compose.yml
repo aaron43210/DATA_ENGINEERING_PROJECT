@@ -1,7 +1,8 @@
 version: "3.9"
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.9.1
+  build: ./airflow
+  image: geoplatform-airflow
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
@@ -172,7 +173,8 @@ services:
 
   # ── Flink ────────────────────────────────────────────────────────
   flink-jobmanager:
-    image: flink:1.18-scala_2.12
+    build: ./flink
+    image: geoplatform-flink
     command: jobmanager
     ports:
       - "8083:8081"
@@ -183,7 +185,8 @@ services:
       - ./flink/jobs:/opt/flink/jobs
 
   flink-taskmanager:
-    image: flink:1.18-scala_2.12
+    build: ./flink
+    image: geoplatform-flink
     command: taskmanager
     environment:
       FLINK_PROPERTIES: |
