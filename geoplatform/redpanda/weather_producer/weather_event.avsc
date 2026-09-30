@@ -1,0 +1,21 @@
+{
+  "namespace": "com.geoplatform.weather",
+  "type": "record",
+  "name": "WeatherEvent",
+  "doc": "Real-time weather observation event from OpenWeatherMap polling producer",
+  "fields": [
+    {"name": "station_id",       "type": "string",                          "doc": "Station identifier e.g. WX_TVM"},
+    {"name": "city_name",        "type": "string",                          "doc": "Human-readable city name"},
+    {"name": "event_time",       "type": "long", "logicalType": "timestamp-millis", "doc": "Observation timestamp (ms since epoch)"},
+    {"name": "latitude",         "type": "double",                          "doc": "Station latitude"},
+    {"name": "longitude",        "type": "double",                          "doc": "Station longitude"},
+    {"name": "temperature_c",    "type": ["null", "double"], "default": null,"doc": "Air temperature in Celsius"},
+    {"name": "humidity_pct",     "type": ["null", "double"], "default": null,"doc": "Relative humidity 0-100"},
+    {"name": "wind_speed_ms",    "type": ["null", "double"], "default": null,"doc": "Wind speed in m/s"},
+    {"name": "cloud_cover_pct",  "type": ["null", "double"], "default": null,"doc": "Cloud cover 0-100"},
+    {"name": "rainfall_1h_mm",   "type": ["null", "double"], "default": null,"doc": "Rainfall in last 1 hour (mm)"},
+    {"name": "weather_condition","type": ["null", "string"], "default": null,"doc": "e.g. Clear, Rain, Clouds"},
+    {"name": "api_poll_ms",      "type": "long",                            "doc": "API response time in milliseconds"},
+    {"name": "quality_flag",     "type": ["null", "string"], "default": null,"doc": "GOOD / STALE / ANOMALY / API_ERROR"}
+  ]
+}
