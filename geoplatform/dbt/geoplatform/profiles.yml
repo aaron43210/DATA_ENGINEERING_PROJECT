@@ -1,0 +1,17 @@
+geoplatform:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: 5432
+      user: geoplatform
+      password: geoplatform
+      dbname: geoplatform
+      schema: dbt_geoplatform
+      threads: 4
+  
+  # Send OpenLineage events to DataHub when dbt runs
+  openlineage:
+    url: http://datahub-gms:8080
+    namespace: geoplatform.dbt

@@ -1,0 +1,32 @@
+version: 2
+models:
+  - name: satellite_observation
+    description: "Gold layer data product — Satellite Imagery domain"
+    meta:
+      domain: Remote Sensing
+      owner: RS Team
+      data_product_id: satellite_imagery
+      sla_freshness_hours: 24
+    columns:
+      - name: scene_id
+        description: "Unique scene identifier from Sentinel-2"
+        tests:
+          - unique
+          - not_null
+      - name: cloud_percentage
+        description: "Cloud cover percentage (0-100)"
+        tests:
+          - not_null
+          - accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: image_quality
+        description: "Derived business logic: Excellent, Good, Poor"
+
+  - name: active_weather_sensors
+    description: "Gold layer data product — Climate domain (Current real-time view)"
+    meta:
+      domain: Climate
+      owner: Climate Team
+      data_product_id: weather_data
+      sla_freshness_hours: 2

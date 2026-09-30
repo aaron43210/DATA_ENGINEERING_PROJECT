@@ -1,0 +1,32 @@
+name: 'geoplatform'
+version: '1.0.0'
+config-version: 2
+
+profile: 'geoplatform'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  geoplatform:
+    # Staging: lightly cleaned source data
+    staging:
+      +materialized: view
+      +schema: staging
+    
+    # Intermediate: complex joins (e.g. spatial joins)
+    intermediate:
+      +materialized: ephemeral
+      
+    # Marts: Gold layer, business-ready Data Products
+    marts:
+      +materialized: table
+      +schema: marts

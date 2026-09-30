@@ -1,0 +1,23 @@
+groups:
+  - name: geoplatform_alerts
+    rules:
+      # Alert: API is down
+      - alert: APIDown
+        expr: up{job="geoplatform-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GeoData API is unreachable"
+          description: "The FastAPI service has been down for > 2 minutes."
+
+      # Alert: High error rate (5xx errors)
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{status_code=~"5.."}[5m]) /
+          rate(http_requests_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Error rate > 5% for 3 minutes"

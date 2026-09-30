@@ -1,0 +1,63 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: geoplatform
+          POSTGRES_PASSWORD: geoplatform
+          POSTGRES_DB: geoplatform
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install black flake8 dbt-postgres openlineage-python
+
+      - name: Lint with flake8
+        run: flake8 api/app/ airflow/dags/ --max-line-length=120 --ignore=E501,W503
+
+      - name: Format check with black
+        run: black --check api/app/ airflow/dags/
+
+      - name: dbt parse and compile
+        working-directory: dbt/geoplatform
+        run: |
+          dbt parse --profiles-dir .
+          dbt compile --profiles-dir .
+
+      - name: Validate docker-compose
+        run: docker compose config --quiet
+
+      - name: Build API Docker image
+        run: docker build -t geoplatform-api:test ./api
+
+      - name: OpenLineage schema validation
+        run: |
+          python -c "
+          from openlineage.client.run import RunEvent, RunState, Run, Job
+          import uuid, datetime
+          event = RunEvent(
+              eventType=RunState.START,
+              eventTime=datetime.datetime.now().isoformat(),
+              run=Run(runId=str(uuid.uuid4())),
+              job=Job(namespace='ci', name='test'),
+              inputs=[], outputs=[]
+          )
+          print('OpenLineage schema valid:', str(event)[:80])
+          "
