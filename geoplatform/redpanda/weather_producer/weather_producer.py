@@ -21,6 +21,7 @@ import random
 from datetime import datetime, timezone
 
 import requests
+from tenacity import retry, stop_after_attempt, wait_exponential
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
@@ -76,26 +77,12 @@ def fetch_weather(station: dict) -> dict | None:
     """
     Poll OpenWeatherMap for one station.
     Returns parsed response dict, or None on failure.
-    Falls back to realistic mock data if API key is 'demo'.
     """
-    start_ms = int(time.time() * 1000)
+    if OPENWEATHER_API_KEY == "demo" or not OPENWEATHER_API_KEY:
+        raise ValueError("PRODUCTION ERROR: OPENWEATHER_API_KEY is missing or invalid. Mock data fallback has been removed.")
 
-    if OPENWEATHER_API_KEY == "demo":
-        # Realistic mock data — simulates live API with natural variation
-        base_temp = {"WX_TVM": 30.5, "WX_COK": 28.2, "WX_CCJ": 27.8, "WX_TCR": 29.1, "WX_QLN": 31.0}
-        temp = round(base_temp.get(station["station_id"], 29.0) + random.uniform(-2.0, 2.0), 1)
-        api_poll_ms = random.randint(80, 300)
-        return {
-            "temperature_c":    temp,
-            "humidity_pct":     round(random.uniform(65, 92), 1),
-            "wind_speed_ms":    round(random.uniform(1.5, 12.0), 1),
-            "cloud_cover_pct":  float(random.randint(10, 90)),
-            "rainfall_1h_mm":   round(random.uniform(0, 8), 2) if random.random() > 0.6 else 0.0,
-            "weather_condition": random.choice(["Clear", "Clouds", "Rain", "Drizzle", "Mist"]),
-            "api_poll_ms":      api_poll_ms,
-        }
-
-    try:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _do_fetch():
         t0 = time.time()
         resp = requests.get(
             OWM_API_URL,
@@ -103,10 +90,11 @@ def fetch_weather(station: dict) -> dict | None:
                     "appid": OPENWEATHER_API_KEY, "units": "metric"},
             timeout=10,
         )
-        api_poll_ms = int((time.time() - t0) * 1000)
         resp.raise_for_status()
-        data = resp.json()
+        return resp.json(), int((time.time() - t0) * 1000)
 
+    try:
+        data, api_poll_ms = _do_fetch()
         return {
             "temperature_c":    data.get("main", {}).get("temp"),
             "humidity_pct":     data.get("main", {}).get("humidity"),
@@ -197,7 +185,7 @@ def main():
     logger.info(f"   Broker:   {REDPANDA_BROKERS}")
     logger.info(f"   Topic:    {TOPIC}")
     logger.info(f"   Interval: {POLL_INTERVAL_SEC}s")
-    logger.info(f"   Mode:     {'DEMO (mock data)' if OPENWEATHER_API_KEY == 'demo' else 'LIVE (OpenWeatherMap API)'}")
+    logger.info(f"   Mode:     LIVE (OpenWeatherMap API)")
 
     producer, avro_serializer = create_producer()
 

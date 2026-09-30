@@ -32,62 +32,61 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
+def execute_gx_checkpoint(checkpoint_name: str, dataset_name: str, suite_name: str):
+    """Executes a Great Expectations checkpoint and logs results to PostGIS."""
+    try:
+        import great_expectations as gx
+    except ImportError:
+        logger.error("PRODUCTION ERROR: great_expectations library not installed.")
+        raise
+        
+    context_root_dir = "/opt/airflow/dags/data_quality"
+    
+    if not os.path.exists(context_root_dir) or not os.path.exists(os.path.join(context_root_dir, "great_expectations.yml")):
+        raise FileNotFoundError(f"PRODUCTION ERROR: Great Expectations context not initialized at {context_root_dir}. Please run 'gx init'.")
+        
+    # Load the Data Context
+    gx_context = gx.get_context(context_root_dir=context_root_dir)
+    
+    # Run the Checkpoint
+    logger.info(f"Executing Checkpoint: {checkpoint_name}")
+    result = gx_context.run_checkpoint(checkpoint_name=checkpoint_name)
+    
+    # Extract metrics
+    try:
+        stats = result.list_validation_results()[0]["statistics"]
+        total = stats["evaluated_expectations"]
+        passed = stats["successful_expectations"]
+        pass_rate = stats["success_percent"]
+    except Exception as e:
+        logger.error(f"Failed to parse GX results: {e}")
+        raise
+    
+    # Insert into quality_runs table
+    conn = psycopg2.connect(**POSTGRES)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO quality_runs (dataset, suite, pass_rate, total_expectations, passed_expectations, failed_expectations) 
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (dataset_name, suite_name, pass_rate, total, passed, total-passed)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    if pass_rate < 100.0:
+        logger.warning(f"🚨 Data Quality Check Failed! Pass rate: {pass_rate}%")
+    else:
+        logger.info(f"✅ Data Quality Check Passed! Pass rate: {pass_rate}%")
+
+
 def run_satellite_quality_check(**context):
-    """Mock Great Expectations run for satellite data."""
-    # In a real environment, this would invoke `gx` CLI or Python context
-    # Here we mock the result to demonstrate the pattern
-    
-    logger.info("Running Great Expectations on marts.satellite_observation...")
-    
-    # Mock validation result
-    total = 50
-    passed = 48
-    failed = 2
-    pass_rate = (passed / total) * 100
-    
-    conn = psycopg2.connect(**POSTGRES)
-    cur = conn.cursor()
-    
-    cur.execute(
-        """
-        INSERT INTO quality_runs (dataset, suite, pass_rate, total_expectations, passed_expectations, failed_expectations, details)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """,
-        ("satellite_observation", "satellite_suite", pass_rate, total, passed, failed, json.dumps({"failed_cols": ["cloud_percentage"]}))
-    )
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    logger.info(f"Satellite quality check complete: {pass_rate}% passed.")
-    
+    execute_gx_checkpoint("satellite_checkpoint", "satellite_observation", "satellite_suite")
+
 def run_weather_quality_check(**context):
-    """Mock Great Expectations run for weather data."""
-    
-    logger.info("Running Great Expectations on marts.environmental_conditions...")
-    
-    total = 100
-    passed = 100
-    failed = 0
-    pass_rate = 100.0
-    
-    conn = psycopg2.connect(**POSTGRES)
-    cur = conn.cursor()
-    
-    cur.execute(
-        """
-        INSERT INTO quality_runs (dataset, suite, pass_rate, total_expectations, passed_expectations, failed_expectations, details)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """,
-        ("environmental_conditions", "weather_suite", pass_rate, total, passed, failed, json.dumps({}))
-    )
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    logger.info(f"Weather quality check complete: {pass_rate}% passed.")
+    execute_gx_checkpoint("weather_checkpoint", "environmental_conditions", "weather_suite")
 
 
 with DAG(
