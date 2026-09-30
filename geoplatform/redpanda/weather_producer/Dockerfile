@@ -5,7 +5,8 @@ WORKDIR /app
 # Install dependencies
 RUN pip install --no-cache-dir \
     confluent-kafka[avro]==2.4.0 \
-    requests==2.31.0
+    requests==2.31.0 \
+    tenacity==8.2.3
 
 # Copy schema and producer code
 COPY weather_event.avsc .

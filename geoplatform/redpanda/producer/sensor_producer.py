@@ -1,86 +1,151 @@
+"""
+IoT Sensor Streaming Producer — Redpanda (Kafka-compatible)
+===========================================================
+Pattern: Push-based Streaming (MQTT to Kafka Bridge)
+  - Subscribes to a real hardware MQTT broker (e.g., AWS IoT, Mosquitto)
+  - Receives physical sensor payloads in real-time
+  - Serializes each payload as an Avro event
+  - Pushes to Redpanda topic: sensor.live
+  - Schema is registered with Redpanda's built-in Schema Registry
+"""
+
 import os
 import time
-import random
+import json
 import logging
 from datetime import datetime, timezone
 
+import paho.mqtt.client as mqtt
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.serialization import SerializationContext, MessageField
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+)
 logger = logging.getLogger("sensor-producer")
 
-REDPANDA_BROKERS = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
+# ── Configuration ──────────────────────────────────────────────────────────────
+REDPANDA_BROKERS    = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
 SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://redpanda:8081")
+TOPIC               = "sensor.live"
 
-# Sensor mock locations in Kerala
-SENSORS = [
-    {"id": "IOT_TVM_01", "lat": 8.5241, "lon": 76.9366},
-    {"id": "IOT_COK_02", "lat": 9.9312, "lon": 76.2673},
-    {"id": "IOT_CCJ_03", "lat": 11.2588, "lon": 75.7804},
-]
+# MQTT Configuration for physical sensors
+MQTT_BROKER         = os.environ.get("MQTT_BROKER", "mqtt.eclipseprojects.io")
+MQTT_PORT           = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_TOPIC          = os.environ.get("MQTT_TOPIC", "geoplatform/sensors/#")
 
-MEASUREMENTS = ["temperature", "humidity", "soil_moisture", "air_quality"]
-
+# Load Avro schema from file
 SCHEMA_STR = open(os.path.join(os.path.dirname(__file__), "sensor_event.avsc")).read()
 
-def create_producer():
+# ── Globals ────────────────────────────────────────────────────────────────────
+redpanda_producer = None
+avro_serializer = None
+
+
+def delivery_report(err, msg):
+    """Kafka/Redpanda delivery callback."""
+    if err:
+        logger.error(f"❌ Delivery failed for {msg.key()}: {err}")
+    else:
+        logger.debug(f"✅ Delivered to {msg.topic()} [partition {msg.partition()}] offset {msg.offset()}")
+
+
+def init_redpanda_producer():
+    """Initialize Redpanda producer with Avro serializer."""
+    global redpanda_producer, avro_serializer
+    
     schema_registry = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
     avro_serializer = AvroSerializer(schema_registry, SCHEMA_STR)
 
-    producer = Producer({
+    redpanda_producer = Producer({
         "bootstrap.servers": REDPANDA_BROKERS,
         "acks": "all",
+        "enable.idempotence": "true",
+        "retries": 5,
         "compression.type": "snappy",
     })
-    return producer, avro_serializer
+    logger.info("✅ Connected to Redpanda Schema Registry & Broker.")
+
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    """Callback when connected to MQTT Broker."""
+    if rc == 0:
+        logger.info(f"✅ Connected to physical MQTT Broker at {MQTT_BROKER}:{MQTT_PORT}")
+        client.subscribe(MQTT_TOPIC)
+        logger.info(f"📡 Subscribed to MQTT topic: {MQTT_TOPIC}")
+    else:
+        logger.error(f"❌ Failed to connect to MQTT Broker, return code {rc}")
+        raise ConnectionError("MQTT Connection failed")
+
+
+def on_mqtt_message(client, userdata, msg):
+    """Callback when a physical sensor publishes a message."""
+    try:
+        # Example physical payload: {"station_id": "SN_101", "temp": 28.5, "hum": 75, "soil": 400, "aqi": 35}
+        payload = json.loads(msg.payload.decode("utf-8"))
+        station_id = payload.get("station_id", "UNKNOWN")
+        
+        # Transform physical payload to Avro Schema format
+        event = {
+            "station_id":       station_id,
+            "event_time":       int(datetime.now(timezone.utc).timestamp() * 1000),
+            "temperature_c":    float(payload.get("temp", 0.0)),
+            "humidity_pct":     float(payload.get("hum", 0.0)),
+            "soil_moisture":    int(payload.get("soil", 0)),
+            "air_quality_idx":  int(payload.get("aqi", 0)),
+        }
+
+        # Produce to Redpanda
+        redpanda_producer.produce(
+            topic=TOPIC,
+            key=station_id,
+            value=avro_serializer(
+                event,
+                SerializationContext(TOPIC, MessageField.VALUE)
+            ),
+            on_delivery=delivery_report,
+        )
+        redpanda_producer.poll(0)  # Trigger delivery callbacks
+        
+        logger.info(f"  → Bridged physical sensor {station_id} to Redpanda (temp={event['temperature_c']}°C)")
+        
+    except json.JSONDecodeError:
+        logger.error("❌ Received malformed MQTT payload (not JSON)")
+    except Exception as e:
+        logger.error(f"❌ Error bridging MQTT message to Redpanda: {e}")
+
 
 def main():
-    logger.info("Starting IoT Sensor Producer...")
-    time.sleep(10) # wait for schema registry
+    """Main process: Connect to Redpanda, then block on MQTT loop."""
+    logger.info("🚀 Starting Physical IoT Sensor Bridge (MQTT → Redpanda)")
     
-    producer, avro_serializer = create_producer()
+    # 1. Init Redpanda
+    init_redpanda_producer()
     
-    while True:
-        sensor = random.choice(SENSORS)
-        m_type = random.choice(MEASUREMENTS)
+    # 2. Init MQTT Client
+    mqtt_client = mqtt.Client(client_id="geoplatform_bridge")
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_message = on_mqtt_message
+    
+    logger.info(f"Connecting to MQTT Broker {MQTT_BROKER}...")
+    try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    except Exception as e:
+        logger.fatal(f"Could not connect to hardware MQTT broker: {e}")
+        raise
         
-        # Base values for simulation
-        if m_type == "temperature": val, unit = random.uniform(20.0, 35.0), "C"
-        elif m_type == "humidity": val, unit = random.uniform(60.0, 95.0), "%"
-        elif m_type == "soil_moisture": val, unit = random.uniform(10.0, 40.0), "%"
-        else: val, unit = random.uniform(20.0, 150.0), "AQI"
-        
-        # Inject occasional anomaly
-        if random.random() > 0.98:
-            val *= 3.0
+    # 3. Block forever listening to physical hardware
+    try:
+        mqtt_client.loop_forever()
+    except KeyboardInterrupt:
+        logger.info("Shutting down bridge...")
+    finally:
+        mqtt_client.disconnect()
+        redpanda_producer.flush()
 
-        event = {
-            "sensor_id": sensor["id"],
-            "event_time": int(datetime.now(timezone.utc).timestamp() * 1000),
-            "latitude": sensor["lat"],
-            "longitude": sensor["lon"],
-            "measurement_type": m_type,
-            "value": round(val, 2),
-            "unit": unit
-        }
-        
-        topic = f"sensor.{m_type}"
-        
-        try:
-            producer.produce(
-                topic=topic,
-                key=sensor["id"],
-                value=avro_serializer(event, SerializationContext(topic, MessageField.VALUE))
-            )
-            producer.poll(0)
-            logger.info(f"Published to {topic}: {sensor['id']} = {round(val, 2)} {unit}")
-        except Exception as e:
-            logger.error(f"Failed to produce: {e}")
-            
-        time.sleep(random.uniform(0.5, 2.0))
 
 if __name__ == "__main__":
     main()
