@@ -1,0 +1,40 @@
+version: 2
+
+sources:
+  - name: geoplatform
+    database: geoplatform
+    schema: public
+    tables:
+      - name: satellite_observations
+        description: "Sentinel-2 ETL output — validated scene metadata (Batch)"
+        freshness:
+          warn_after: {count: 25, period: hour}
+          error_after: {count: 48, period: hour}
+        loaded_at_field: ingested_at
+        
+      - name: weather_observations
+        description: "OpenWeatherMap Historical Backfill (Batch)"
+        freshness:
+          warn_after: {count: 25, period: hour}
+          error_after: {count: 48, period: hour}
+        loaded_at_field: ingested_at
+        
+      - name: weather_stream_observations
+        description: "Live Weather streaming data (Flink Stream)"
+        freshness:
+          warn_after: {count: 2, period: hour}
+          error_after: {count: 6, period: hour}
+        loaded_at_field: processed_at
+
+      - name: admin_boundaries
+        description: "Admin boundaries for spatial joins (Static)"
+        
+      - name: vector_features
+        description: "OpenStreetMap features (Batch)"
+
+      - name: sensor_observations
+        description: "Real-time IoT sensors stream (Flink Stream)"
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 60, period: minute}
+        loaded_at_field: processed_at

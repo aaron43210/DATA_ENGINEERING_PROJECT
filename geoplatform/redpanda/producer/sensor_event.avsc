@@ -1,0 +1,15 @@
+{
+  "namespace": "com.geoplatform.iot",
+  "type": "record",
+  "name": "SensorEvent",
+  "doc": "Real-time IoT sensor observation",
+  "fields": [
+    {"name": "sensor_id",        "type": "string", "doc": "Unique sensor ID"},
+    {"name": "event_time",       "type": "long", "logicalType": "timestamp-millis", "doc": "Observation time"},
+    {"name": "latitude",         "type": "double", "doc": "Sensor latitude"},
+    {"name": "longitude",        "type": "double", "doc": "Sensor longitude"},
+    {"name": "measurement_type", "type": "string", "doc": "temperature, humidity, soil_moisture, air_quality"},
+    {"name": "value",            "type": "double", "doc": "Measured value"},
+    {"name": "unit",             "type": "string", "doc": "Measurement unit"}
+  ]
+}
