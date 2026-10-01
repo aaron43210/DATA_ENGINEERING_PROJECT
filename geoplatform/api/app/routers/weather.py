@@ -6,6 +6,7 @@ from app.auth import verify_access, mask_pii
 
 router = APIRouter(prefix="/weather", tags=["Weather"])
 
+
 class WeatherRecord(BaseModel):
     station_id: str
     city_name: Optional[str] = None
@@ -21,13 +22,14 @@ class WeatherRecord(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
+
 @router.get("/", response_model=List[WeatherRecord])
 async def get_weather(
     station_id: Optional[str] = Query(default=None),
     limit: int = Query(default=100, le=1000),
     anomalies_only: bool = Query(default=False),
     db=Depends(get_db),
-    user_info: dict = Depends(verify_access)
+    user_info: dict = Depends(verify_access),
 ):
     """Live weather stream observations (from Flink-processed Redpanda stream)."""
     conditions = ["1=1"]
