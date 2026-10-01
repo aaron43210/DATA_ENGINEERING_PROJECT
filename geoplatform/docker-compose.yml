@@ -242,6 +242,13 @@ services:
       - datahub_data:/var/datahub
     environment:
       DATAHUB_SECRET: ${DATAHUB_SECRET:?set in .env}
+    networks:
+      default:
+        aliases:
+          # OpenLineage producers (Airflow, Flink) POST to http://datahub-gms:8080.
+          # The quickstart container serves GMS on 8080; this alias makes that
+          # hostname resolve to it on the compose network.
+          - datahub-gms
 
   # ── FastAPI + GraphQL ────────────────────────────────────────────
   api:
