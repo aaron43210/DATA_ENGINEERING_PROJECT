@@ -2,7 +2,7 @@
 Unified Flink Stream Processor
 ================================
 Consumes TWO real-time Redpanda streams simultaneously:
-  1. sensor.temperature / sensor.humidity / sensor.soil_moisture / sensor.air_quality
+  1. sensor.live
      → IoT sensor events (Avro-serialized)
   2. weather.live
      → Weather polling events (Avro-serialized, every 60s per station)
@@ -18,9 +18,9 @@ Processing steps:
   - Emit OpenLineage events to DataHub for lineage tracking
 
 Architecture:
-  Redpanda sensor.* ──┐
-                       ├──► Flink ──► PostgreSQL (sensor_observations)
-  Redpanda weather.live─┘         └──► PostgreSQL (weather_stream_observations)
+  Redpanda sensor.live ──┐
+                         ├──► Flink ──► PostgreSQL (sensor_observations)
+  Redpanda weather.live ─┘         └──► PostgreSQL (weather_stream_observations)
                                    └──► Redpanda (platform.quality.alerts)
                                    └──► DataHub  (OpenLineage events)
 """
@@ -35,8 +35,10 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 import psycopg2
-from kafka import KafkaConsumer, KafkaProducer
-from kafka.errors import NoBrokersAvailable
+from confluent_kafka import Consumer, Producer, KafkaException
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroDeserializer
+from confluent_kafka.serialization import SerializationContext, MessageField
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,24 +48,21 @@ logger = logging.getLogger("flink-processor")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 KAFKA_SERVERS = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
+SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 
-SENSOR_TOPICS = [
-    "sensor.temperature",
-    "sensor.humidity",
-    "sensor.soil_moisture",
-    "sensor.air_quality",
-]
+# Both producers publish Avro-serialized events to these single topics.
+SENSOR_TOPICS = ["sensor.live"]
 
 WEATHER_TOPIC = "weather.live"
 
 ALL_TOPICS = SENSOR_TOPICS + [WEATHER_TOPIC]
 
 POSTGRES = {
-    "host":     os.environ.get("POSTGRES_HOST", "postgres"),
-    "port":     5432,
-    "dbname":   "geoplatform",
-    "user":     "geoplatform",
-    "password": "geoplatform",
+    "host": os.environ.get("POSTGRES_HOST", "postgres"),
+    "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+    "dbname": os.environ.get("POSTGRES_DB", "geoplatform"),
+    "user": os.environ.get("POSTGRES_USER", "geoplatform"),
+    "password": os.environ["POSTGRES_PASSWORD"],
 }
 
 OPENLINEAGE_URL = os.environ.get("OPENLINEAGE_URL", "http://datahub-gms:8080")
@@ -73,19 +72,20 @@ OPENLINEAGE_URL = os.environ.get("OPENLINEAGE_URL", "http://datahub-gms:8080")
 _windows: dict = defaultdict(lambda: deque(maxlen=30))
 
 # ── State: latest weather per station (for sensor-weather join) ────────────────
-_latest_weather: dict = {}   # {station_id: weather_event_dict}
+_latest_weather: dict = {}  # {station_id: weather_event_dict}
 
 # ── Kerala station locations for nearest-station lookup ───────────────────────
 STATION_LOCATIONS = {
-    "WX_TVM": (8.5241,  76.9366),
-    "WX_COK": (9.9312,  76.2673),
+    "WX_TVM": (8.5241, 76.9366),
+    "WX_COK": (9.9312, 76.2673),
     "WX_CCJ": (11.2588, 75.7804),
     "WX_TCR": (10.5276, 76.2144),
-    "WX_QLN": (8.8932,  76.6141),
+    "WX_QLN": (8.8932, 76.6141),
 }
 
 
 # ── Database Setup ─────────────────────────────────────────────────────────────
+
 
 def get_pg_connection():
     return psycopg2.connect(**POSTGRES)
@@ -144,10 +144,18 @@ def ensure_tables():
         )
     """)
 
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_weather_stream_time ON weather_stream_observations(event_time)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_weather_stream_station ON weather_stream_observations(station_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_sensor_obs_time ON sensor_observations(event_time)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_sensor_obs_id ON sensor_observations(sensor_id)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_weather_stream_time ON weather_stream_observations(event_time)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_weather_stream_station ON weather_stream_observations(station_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sensor_obs_time ON sensor_observations(event_time)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sensor_obs_id ON sensor_observations(sensor_id)"
+    )
 
     conn.commit()
     cur.close()
@@ -156,6 +164,7 @@ def ensure_tables():
 
 
 # ── Anomaly Detection ──────────────────────────────────────────────────────────
+
 
 def detect_anomaly(window_key: str, value: float) -> bool:
     """
@@ -166,7 +175,7 @@ def detect_anomaly(window_key: str, value: float) -> bool:
     window.append(value)
 
     if len(window) < 5:
-        return False   # Not enough data yet
+        return False  # Not enough data yet
 
     mean = statistics.mean(window)
     try:
@@ -175,7 +184,7 @@ def detect_anomaly(window_key: str, value: float) -> bool:
         return False
 
     if stdev < 0.001:
-        return False   # No variance — all values identical (stale data)
+        return False  # No variance — all values identical (stale data)
 
     z_score = abs((value - mean) / stdev)
     return z_score > 3.0
@@ -195,13 +204,20 @@ def get_window_stats(window_key: str) -> tuple:
 
 # ── Nearest-Station Join ───────────────────────────────────────────────────────
 
+
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Approximate distance in km between two lat/lon points."""
     import math
+
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
     return R * 2 * math.asin(math.sqrt(a))
 
 
@@ -209,7 +225,7 @@ def find_nearest_weather_station(lat: float, lon: float) -> str:
     """Return the station_id of the closest weather monitoring station."""
     nearest = min(
         STATION_LOCATIONS.items(),
-        key=lambda item: haversine_distance(lat, lon, item[1][0], item[1][1])
+        key=lambda item: haversine_distance(lat, lon, item[1][0], item[1][1]),
     )
     return nearest[0]
 
@@ -223,50 +239,58 @@ def get_ambient_conditions(sensor_lat: float, sensor_lon: float) -> dict:
     weather = _latest_weather.get(station_id, {})
     return {
         "nearest_station": station_id,
-        "ambient_temp":    weather.get("temperature_c"),
+        "ambient_temp": weather.get("temperature_c"),
         "ambient_humidity": weather.get("humidity_pct"),
     }
 
 
 # ── Kafka Alert Publisher ──────────────────────────────────────────────────────
 
-def create_alert_producer() -> KafkaProducer:
-    return KafkaProducer(
-        bootstrap_servers=KAFKA_SERVERS,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        key_serializer=lambda k: k.encode("utf-8") if k else None,
-        acks="all",
+
+def create_alert_producer() -> Producer:
+    return Producer(
+        {
+            "bootstrap.servers": KAFKA_SERVERS,
+            "acks": "all",
+        }
     )
 
 
-def publish_quality_alert(producer: KafkaProducer, source_type: str, event: dict, reason: str):
+def publish_quality_alert(
+    producer: Producer, source_type: str, event: dict, reason: str
+):
     """Push quality alerts back to Redpanda for downstream consumers."""
     alert = {
-        "alert_id":   str(uuid.uuid4()),
-        "dataset":    f"geoplatform.{source_type}",
-        "source_id":  event.get("sensor_id") or event.get("station_id") or "unknown",
+        "alert_id": str(uuid.uuid4()),
+        "dataset": f"geoplatform.{source_type}",
+        "source_id": event.get("sensor_id") or event.get("station_id") or "unknown",
         "alert_type": reason,
-        "value":      event.get("value") or event.get("temperature_c"),
-        "timestamp":  datetime.now(timezone.utc).isoformat(),
-        "severity":   "HIGH" if reason == "ZSCORE_ANOMALY" else "MEDIUM",
+        "value": event.get("value") or event.get("temperature_c"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "severity": "HIGH" if reason == "ZSCORE_ANOMALY" else "MEDIUM",
     }
     try:
-        producer.send(
+        producer.produce(
             "platform.quality.alerts",
-            key=alert["source_id"],
-            value=alert,
+            key=str(alert["source_id"]).encode("utf-8"),
+            value=json.dumps(alert).encode("utf-8"),
         )
-        logger.warning(f"🚨 Alert published: {reason} | {alert['source_id']} | val={alert['value']}")
+        producer.poll(0)
+        logger.warning(
+            f"🚨 Alert published: {reason} | {alert['source_id']} | val={alert['value']}"
+        )
     except Exception as e:
         logger.error(f"Failed to publish alert: {e}")
 
 
 # ── OpenLineage Emitter ────────────────────────────────────────────────────────
 
+
 def emit_openlineage_start(run_id: str):
     """Emit a START lineage event to DataHub via OpenLineage protocol."""
     try:
         import urllib.request
+
         event = {
             "eventType": "START",
             "eventTime": datetime.now(timezone.utc).isoformat(),
@@ -276,15 +300,15 @@ def emit_openlineage_start(run_id: str):
                 "name": "unified_stream_processor",
             },
             "inputs": [
-                {"namespace": "redpanda", "name": "sensor.temperature"},
-                {"namespace": "redpanda", "name": "sensor.humidity"},
-                {"namespace": "redpanda", "name": "sensor.soil_moisture"},
-                {"namespace": "redpanda", "name": "sensor.air_quality"},
+                {"namespace": "redpanda", "name": "sensor.live"},
                 {"namespace": "redpanda", "name": "weather.live"},
             ],
             "outputs": [
                 {"namespace": "postgresql", "name": "geoplatform.sensor_observations"},
-                {"namespace": "postgresql", "name": "geoplatform.weather_stream_observations"},
+                {
+                    "namespace": "postgresql",
+                    "name": "geoplatform.weather_stream_observations",
+                },
             ],
         }
         data = json.dumps(event).encode("utf-8")
@@ -294,13 +318,14 @@ def emit_openlineage_start(run_id: str):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5):
             logger.info(f"📡 OpenLineage START emitted (run_id={run_id[:8]}...)")
     except Exception as e:
         logger.warning(f"OpenLineage emit failed (non-critical): {e}")
 
 
 # ── Batch Writers ──────────────────────────────────────────────────────────────
+
 
 def write_sensor_batch(conn, records: list):
     """Write a batch of processed sensor records to PostgreSQL."""
@@ -346,9 +371,10 @@ def write_weather_batch(conn, records: list):
 
 # ── Message Processors ─────────────────────────────────────────────────────────
 
+
 def process_sensor_message(
     message_value: dict,
-    alert_producer: KafkaProducer,
+    alert_producer: Producer,
 ) -> tuple | None:
     """
     Process one IoT sensor event.
@@ -365,7 +391,9 @@ def process_sensor_message(
     avg, wmax, wmin = get_window_stats(window_key)
 
     if is_anomaly or message_value.get("quality_flag") == "ANOMALY":
-        publish_quality_alert(alert_producer, "sensor_observations", message_value, "ZSCORE_ANOMALY")
+        publish_quality_alert(
+            alert_producer, "sensor_observations", message_value, "ZSCORE_ANOMALY"
+        )
 
     # Real-time join with nearest weather station
     ambient = get_ambient_conditions(lat, lon)
@@ -384,7 +412,9 @@ def process_sensor_message(
         value,
         message_value.get("unit", ""),
         message_value.get("quality_flag"),
-        avg, wmax, wmin,
+        avg,
+        wmax,
+        wmin,
         is_anomaly,
         ambient["nearest_station"],
         ambient["ambient_temp"],
@@ -394,7 +424,7 @@ def process_sensor_message(
 
 def process_weather_message(
     message_value: dict,
-    alert_producer: KafkaProducer,
+    alert_producer: Producer,
 ) -> tuple | None:
     """
     Process one weather stream event.
@@ -421,7 +451,9 @@ def process_weather_message(
         avg, wmax, wmin = get_window_stats(window_key)
 
         if is_anomaly:
-            publish_quality_alert(alert_producer, "weather_stream", message_value, "TEMP_ANOMALY")
+            publish_quality_alert(
+                alert_producer, "weather_stream", message_value, "TEMP_ANOMALY"
+            )
     else:
         is_anomaly = False
         avg = wmax = wmin = None
@@ -445,12 +477,15 @@ def process_weather_message(
         message_value.get("weather_condition"),
         message_value.get("api_poll_ms", 0),
         message_value.get("quality_flag", "GOOD"),
-        avg, wmax, wmin,
+        avg,
+        wmax,
+        wmin,
         is_anomaly,
     )
 
 
 # ── Main Stream Processing Loop ────────────────────────────────────────────────
+
 
 def process_stream():
     """
@@ -464,22 +499,34 @@ def process_stream():
     run_id = str(uuid.uuid4())
     emit_openlineage_start(run_id)
 
+    # Avro deserializer backed by the Redpanda Schema Registry. With no reader
+    # schema it resolves each message's writer schema by the embedded schema id,
+    # so it handles both sensor.live and weather.live events.
+    schema_registry = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
+    avro_deserializer = AvroDeserializer(schema_registry)
+
     # Wait for Redpanda to be ready
+    consumer = None
     for attempt in range(10):
         try:
-            consumer = KafkaConsumer(
-                *ALL_TOPICS,
-                bootstrap_servers=KAFKA_SERVERS,
-                group_id="flink-unified-processor",
-                auto_offset_reset="latest",
-                enable_auto_commit=True,
-                value_deserializer=lambda m: json.loads(m.decode("utf-8")) if m else None,
-                consumer_timeout_ms=2000,
+            consumer = Consumer(
+                {
+                    "bootstrap.servers": KAFKA_SERVERS,
+                    "group.id": "flink-unified-processor",
+                    "auto.offset.reset": "latest",
+                    "enable.auto.commit": True,
+                }
             )
+            consumer.subscribe(ALL_TOPICS)
+            # Force a metadata fetch to confirm the broker is reachable.
+            consumer.list_topics(timeout=5)
             logger.info(f"✅ Connected to Redpanda. Consuming: {ALL_TOPICS}")
             break
-        except NoBrokersAvailable:
-            logger.warning(f"⏳ Redpanda not ready, retry {attempt+1}/10...")
+        except KafkaException:
+            logger.warning(f"⏳ Redpanda not ready, retry {attempt + 1}/10...")
+            if consumer is not None:
+                consumer.close()
+                consumer = None
             time.sleep(5)
     else:
         raise RuntimeError("Could not connect to Redpanda after 10 attempts")
@@ -501,50 +548,66 @@ def process_stream():
 
     while True:
         try:
-            for message in consumer:
-                if message.value is None:
-                    continue
+            msg = consumer.poll(1.0)
 
-                topic = message.topic
-                value = message.value
+            if msg is not None and msg.error():
+                logger.error(f"Consumer error: {msg.error()}")
+                msg = None
 
-                # ── Route to correct processor ──────────────────────────────
-                if topic in SENSOR_TOPICS:
-                    record = process_sensor_message(value, alert_producer)
-                    if record:
-                        sensor_batch.append(record)
-                        total_sensor += 1
-                        if record[12]:   # is_anomaly field
-                            total_anomaly += 1
+            if msg is not None:
+                try:
+                    value = avro_deserializer(
+                        msg.value(),
+                        SerializationContext(msg.topic(), MessageField.VALUE),
+                    )
+                except Exception as e:
+                    logger.error(f"Avro deserialization failed on {msg.topic()}: {e}")
+                    value = None
 
-                elif topic == WEATHER_TOPIC:
-                    record = process_weather_message(value, alert_producer)
-                    if record:
-                        weather_batch.append(record)
-                        total_weather += 1
+                if value is not None:
+                    topic = msg.topic()
 
-                # ── Flush to DB when batch is full or timeout ───────────────
-                now = time.time()
-                should_flush = (
-                    len(sensor_batch) >= BATCH_SIZE
-                    or len(weather_batch) >= BATCH_SIZE
-                    or (now - last_flush) >= FLUSH_INTERVAL_SEC
+                    # ── Route to correct processor ──────────────────────────
+                    if topic in SENSOR_TOPICS:
+                        record = process_sensor_message(value, alert_producer)
+                        if record:
+                            sensor_batch.append(record)
+                            total_sensor += 1
+                            if record[11]:  # is_anomaly field
+                                total_anomaly += 1
+
+                    elif topic == WEATHER_TOPIC:
+                        record = process_weather_message(value, alert_producer)
+                        if record:
+                            weather_batch.append(record)
+                            total_weather += 1
+
+            # ── Flush to DB when batch is full or timeout (evaluated every
+            #    poll, including idle polls, so partial batches don't stall) ──
+            now = time.time()
+            should_flush = (
+                len(sensor_batch) >= BATCH_SIZE
+                or len(weather_batch) >= BATCH_SIZE
+                or (
+                    (now - last_flush) >= FLUSH_INTERVAL_SEC
+                    and (sensor_batch or weather_batch)
+                )
+            )
+
+            if should_flush:
+                write_sensor_batch(pg_conn, sensor_batch)
+                write_weather_batch(pg_conn, weather_batch)
+
+                logger.info(
+                    f"📊 Stats — sensors={total_sensor} "
+                    f"weather={total_weather} "
+                    f"anomalies={total_anomaly} "
+                    f"weather_cache_stations={len(_latest_weather)}"
                 )
 
-                if should_flush:
-                    write_sensor_batch(pg_conn, sensor_batch)
-                    write_weather_batch(pg_conn, weather_batch)
-
-                    logger.info(
-                        f"📊 Stats — sensors={total_sensor} "
-                        f"weather={total_weather} "
-                        f"anomalies={total_anomaly} "
-                        f"weather_cache_stations={len(_latest_weather)}"
-                    )
-
-                    sensor_batch = []
-                    weather_batch = []
-                    last_flush = now
+                sensor_batch = []
+                weather_batch = []
+                last_flush = now
 
         except psycopg2.OperationalError:
             logger.warning("PostgreSQL connection dropped, reconnecting...")
