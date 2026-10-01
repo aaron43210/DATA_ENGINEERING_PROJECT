@@ -9,6 +9,33 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    # NOTE: this workflow expects to run with the `geoplatform/` directory as the
+    # working directory (all relative paths below are relative to it). GitHub
+    # only discovers workflows under the repository-root `.github/workflows/`, so
+    # if `geoplatform/` is not the repo root this file must be relocated there.
+    defaults:
+      run:
+        working-directory: geoplatform
+    env:
+      # Non-secret placeholder values so `docker compose config` can resolve the
+      # required ${VAR:?...} references during validation. These are CI-only and
+      # never deployed.
+      OPENWEATHER_API_KEY: ci-placeholder
+      POSTGRES_PASSWORD: geoplatform
+      AIRFLOW_DB_PASSWORD: airflow
+      AIRFLOW_FERNET_KEY: ci-placeholder-fernet-key-not-used-at-build
+      AIRFLOW_ADMIN_PASSWORD: ci-admin
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      LAKEFS_ACCESS_KEY: ci-access-key
+      LAKEFS_SECRET_KEY: ci-secret-key
+      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ci-encrypt-secret
+      MONGO_ROOT_USER: admin
+      MONGO_ROOT_PASSWORD: admin
+      JWT_SECRET: ci-jwt-secret
+      API_KEY: ci-api-key
+      DATAHUB_SECRET: ci-datahub-secret
+      GRAFANA_ADMIN_PASSWORD: ci-grafana
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -27,7 +54,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install black flake8 dbt-postgres openlineage-python
+          pip install black flake8 pytest dbt-postgres openlineage-python
+          pip install -r api/requirements.txt
 
       - name: Lint with flake8
         run: flake8 api/app/ airflow/dags/ --max-line-length=120 --ignore=E501,W503
@@ -35,8 +63,12 @@ jobs:
       - name: Format check with black
         run: black --check api/app/ airflow/dags/
 
+      - name: Run API unit tests
+        working-directory: geoplatform/api
+        run: pytest -q
+
       - name: dbt parse and compile
-        working-directory: dbt/geoplatform
+        working-directory: geoplatform/dbt/geoplatform
         run: |
           dbt parse --profiles-dir .
           dbt compile --profiles-dir .

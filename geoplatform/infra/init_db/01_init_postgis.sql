@@ -188,9 +188,9 @@ ON CONFLICT DO NOTHING;
 -- Seed: GDPR registry (location data is PII)
 INSERT INTO gdpr_field_registry (table_name, field_name, pii_category, masking_strategy, retention_days)
 VALUES
-    ('sensor_observations', 'latitude', 'location', 'truncate_3dp', 365),
-    ('sensor_observations', 'longitude', 'location', 'truncate_3dp', 365),
+    ('sensor_observations', 'latitude', 'location', 'truncate_2dp', 365),
+    ('sensor_observations', 'longitude', 'location', 'truncate_2dp', 365),
     ('weather_observations', 'location', 'location', 'null', 730),
-    ('weather_stream_observations', 'latitude', 'location', 'truncate_3dp', 365),
-    ('weather_stream_observations', 'longitude', 'location', 'truncate_3dp', 365)
+    ('weather_stream_observations', 'latitude', 'location', 'truncate_2dp', 365),
+    ('weather_stream_observations', 'longitude', 'location', 'truncate_2dp', 365)
 ON CONFLICT DO NOTHING;

@@ -17,7 +17,6 @@ Flow:
 import os
 import time
 import logging
-import random
 from datetime import datetime, timezone
 
 import requests
@@ -34,20 +33,25 @@ logging.basicConfig(
 logger = logging.getLogger("weather-producer")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-REDPANDA_BROKERS    = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
+REDPANDA_BROKERS = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
 SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "demo")
-POLL_INTERVAL_SEC   = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))  # poll every 60s
-TOPIC               = "weather.live"
-OWM_API_URL         = "https://api.openweathermap.org/data/2.5/weather"
+POLL_INTERVAL_SEC = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))  # poll every 60s
+TOPIC = "weather.live"
+OWM_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 # ── Kerala monitoring stations ─────────────────────────────────────────────────
 STATIONS = [
-    {"station_id": "WX_TVM", "city_name": "Thiruvananthapuram", "lat": 8.5241,  "lon": 76.9366},
-    {"station_id": "WX_COK", "city_name": "Kochi",              "lat": 9.9312,  "lon": 76.2673},
-    {"station_id": "WX_CCJ", "city_name": "Kozhikode",          "lat": 11.2588, "lon": 75.7804},
-    {"station_id": "WX_TCR", "city_name": "Thrissur",           "lat": 10.5276, "lon": 76.2144},
-    {"station_id": "WX_QLN", "city_name": "Kollam",             "lat": 8.8932,  "lon": 76.6141},
+    {
+        "station_id": "WX_TVM",
+        "city_name": "Thiruvananthapuram",
+        "lat": 8.5241,
+        "lon": 76.9366,
+    },
+    {"station_id": "WX_COK", "city_name": "Kochi", "lat": 9.9312, "lon": 76.2673},
+    {"station_id": "WX_CCJ", "city_name": "Kozhikode", "lat": 11.2588, "lon": 75.7804},
+    {"station_id": "WX_TCR", "city_name": "Thrissur", "lat": 10.5276, "lon": 76.2144},
+    {"station_id": "WX_QLN", "city_name": "Kollam", "lat": 8.8932, "lon": 76.6141},
 ]
 
 # Load Avro schema from file
@@ -55,10 +59,10 @@ SCHEMA_STR = open(os.path.join(os.path.dirname(__file__), "weather_event.avsc"))
 
 # ── Anomaly thresholds for quality flagging ────────────────────────────────────
 ANOMALY_THRESHOLDS = {
-    "temperature_c":   (-5.0,  50.0),   # Kerala extreme bounds
-    "humidity_pct":    (0.0,   100.0),
-    "wind_speed_ms":   (0.0,   60.0),   # 60 m/s = Category 5 hurricane
-    "rainfall_1h_mm":  (0.0,   200.0),  # 200mm/hr is extreme cloudburst
+    "temperature_c": (-5.0, 50.0),  # Kerala extreme bounds
+    "humidity_pct": (0.0, 100.0),
+    "wind_speed_ms": (0.0, 60.0),  # 60 m/s = Category 5 hurricane
+    "rainfall_1h_mm": (0.0, 200.0),  # 200mm/hr is extreme cloudburst
 }
 
 # Rolling buffer to detect stale data (same temp twice = possible stale API response)
@@ -70,7 +74,9 @@ def delivery_report(err, msg):
     if err:
         logger.error(f"❌ Delivery failed for {msg.key()}: {err}")
     else:
-        logger.debug(f"✅ Delivered to {msg.topic()} [partition {msg.partition()}] offset {msg.offset()}")
+        logger.debug(
+            f"✅ Delivered to {msg.topic()} [partition {msg.partition()}] offset {msg.offset()}"
+        )
 
 
 def fetch_weather(station: dict) -> dict | None:
@@ -79,15 +85,23 @@ def fetch_weather(station: dict) -> dict | None:
     Returns parsed response dict, or None on failure.
     """
     if OPENWEATHER_API_KEY == "demo" or not OPENWEATHER_API_KEY:
-        raise ValueError("PRODUCTION ERROR: OPENWEATHER_API_KEY is missing or invalid. Mock data fallback has been removed.")
+        raise ValueError(
+            "PRODUCTION ERROR: OPENWEATHER_API_KEY is missing or invalid. Mock data fallback has been removed."
+        )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     def _do_fetch():
         t0 = time.time()
         resp = requests.get(
             OWM_API_URL,
-            params={"lat": station["lat"], "lon": station["lon"],
-                    "appid": OPENWEATHER_API_KEY, "units": "metric"},
+            params={
+                "lat": station["lat"],
+                "lon": station["lon"],
+                "appid": OPENWEATHER_API_KEY,
+                "units": "metric",
+            },
             timeout=10,
         )
         resp.raise_for_status()
@@ -96,13 +110,13 @@ def fetch_weather(station: dict) -> dict | None:
     try:
         data, api_poll_ms = _do_fetch()
         return {
-            "temperature_c":    data.get("main", {}).get("temp"),
-            "humidity_pct":     data.get("main", {}).get("humidity"),
-            "wind_speed_ms":    data.get("wind", {}).get("speed"),
-            "cloud_cover_pct":  float(data.get("clouds", {}).get("all", 0)),
-            "rainfall_1h_mm":   data.get("rain", {}).get("1h", 0.0),
+            "temperature_c": data.get("main", {}).get("temp"),
+            "humidity_pct": data.get("main", {}).get("humidity"),
+            "wind_speed_ms": data.get("wind", {}).get("speed"),
+            "cloud_cover_pct": float(data.get("clouds", {}).get("all", 0)),
+            "rainfall_1h_mm": data.get("rain", {}).get("1h", 0.0),
             "weather_condition": data.get("weather", [{}])[0].get("main"),
-            "api_poll_ms":      api_poll_ms,
+            "api_poll_ms": api_poll_ms,
         }
     except requests.exceptions.Timeout:
         logger.warning(f"⏱ API timeout for {station['station_id']}")
@@ -134,7 +148,9 @@ def assign_quality_flag(station_id: str, data: dict) -> str:
     for field, (low, high) in ANOMALY_THRESHOLDS.items():
         val = data.get(field)
         if val is not None and not (low <= val <= high):
-            logger.warning(f"🚨 Anomaly detected: {station_id} {field}={val} (bounds: {low}–{high})")
+            logger.warning(
+                f"🚨 Anomaly detected: {station_id} {field}={val} (bounds: {low}–{high})"
+            )
             return "ANOMALY"
 
     return "GOOD"
@@ -143,19 +159,19 @@ def assign_quality_flag(station_id: str, data: dict) -> str:
 def build_avro_event(station: dict, data: dict, quality_flag: str) -> dict:
     """Build the Avro-compatible dict matching weather_event.avsc schema."""
     return {
-        "station_id":        station["station_id"],
-        "city_name":         station["city_name"],
-        "event_time":        int(datetime.now(timezone.utc).timestamp() * 1000),
-        "latitude":          station["lat"],
-        "longitude":         station["lon"],
-        "temperature_c":     data.get("temperature_c"),
-        "humidity_pct":      data.get("humidity_pct"),
-        "wind_speed_ms":     data.get("wind_speed_ms"),
-        "cloud_cover_pct":   data.get("cloud_cover_pct"),
-        "rainfall_1h_mm":    data.get("rainfall_1h_mm", 0.0),
+        "station_id": station["station_id"],
+        "city_name": station["city_name"],
+        "event_time": int(datetime.now(timezone.utc).timestamp() * 1000),
+        "latitude": station["lat"],
+        "longitude": station["lon"],
+        "temperature_c": data.get("temperature_c"),
+        "humidity_pct": data.get("humidity_pct"),
+        "wind_speed_ms": data.get("wind_speed_ms"),
+        "cloud_cover_pct": data.get("cloud_cover_pct"),
+        "rainfall_1h_mm": data.get("rainfall_1h_mm", 0.0),
         "weather_condition": data.get("weather_condition"),
-        "api_poll_ms":       data.get("api_poll_ms", 0),
-        "quality_flag":      quality_flag,
+        "api_poll_ms": data.get("api_poll_ms", 0),
+        "quality_flag": quality_flag,
     }
 
 
@@ -164,14 +180,16 @@ def create_producer():
     schema_registry = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
     avro_serializer = AvroSerializer(schema_registry, SCHEMA_STR)
 
-    producer = Producer({
-        "bootstrap.servers": REDPANDA_BROKERS,
-        "acks": "all",                    # wait for leader + replicas
-        "enable.idempotence": "true",     # exactly-once producer semantics
-        "retries": 5,
-        "retry.backoff.ms": 500,
-        "compression.type": "snappy",     # compress Avro payloads
-    })
+    producer = Producer(
+        {
+            "bootstrap.servers": REDPANDA_BROKERS,
+            "acks": "all",  # wait for leader + replicas
+            "enable.idempotence": "true",  # exactly-once producer semantics
+            "retries": 5,
+            "retry.backoff.ms": 500,
+            "compression.type": "snappy",  # compress Avro payloads
+        }
+    )
 
     return producer, avro_serializer
 
@@ -181,11 +199,11 @@ def main():
     Main loop:
       Every POLL_INTERVAL_SECONDS → poll all stations → push Avro events to Redpanda
     """
-    logger.info(f"🌦  Weather streaming producer starting")
+    logger.info("🌦  Weather streaming producer starting")
     logger.info(f"   Broker:   {REDPANDA_BROKERS}")
     logger.info(f"   Topic:    {TOPIC}")
     logger.info(f"   Interval: {POLL_INTERVAL_SEC}s")
-    logger.info(f"   Mode:     LIVE (OpenWeatherMap API)")
+    logger.info("   Mode:     LIVE (OpenWeatherMap API)")
 
     producer, avro_serializer = create_producer()
 
@@ -204,19 +222,19 @@ def main():
             if raw_data is None:
                 # Failed to fetch — produce an error event so Flink knows
                 error_event = {
-                    "station_id":        station["station_id"],
-                    "city_name":         station["city_name"],
-                    "event_time":        int(datetime.now(timezone.utc).timestamp() * 1000),
-                    "latitude":          station["lat"],
-                    "longitude":         station["lon"],
-                    "temperature_c":     None,
-                    "humidity_pct":      None,
-                    "wind_speed_ms":     None,
-                    "cloud_cover_pct":   None,
-                    "rainfall_1h_mm":    None,
+                    "station_id": station["station_id"],
+                    "city_name": station["city_name"],
+                    "event_time": int(datetime.now(timezone.utc).timestamp() * 1000),
+                    "latitude": station["lat"],
+                    "longitude": station["lon"],
+                    "temperature_c": None,
+                    "humidity_pct": None,
+                    "wind_speed_ms": None,
+                    "cloud_cover_pct": None,
+                    "rainfall_1h_mm": None,
                     "weather_condition": None,
-                    "api_poll_ms":       -1,
-                    "quality_flag":      "API_ERROR",
+                    "api_poll_ms": -1,
+                    "quality_flag": "API_ERROR",
                 }
                 raw_data = error_event
                 quality_flag = "API_ERROR"
@@ -235,10 +253,9 @@ def main():
             try:
                 producer.produce(
                     topic=TOPIC,
-                    key=station["station_id"],      # partition by station
+                    key=station["station_id"],  # partition by station
                     value=avro_serializer(
-                        event,
-                        SerializationContext(TOPIC, MessageField.VALUE)
+                        event, SerializationContext(TOPIC, MessageField.VALUE)
                     ),
                     on_delivery=delivery_report,
                 )
