@@ -6,6 +6,7 @@ from app.auth import verify_access
 
 router = APIRouter(prefix="/lineage", tags=["Data Lineage"])
 
+
 class LineageEvent(BaseModel):
     run_id: str
     job_name: str
@@ -15,12 +16,13 @@ class LineageEvent(BaseModel):
     input_datasets: Optional[list] = None
     output_datasets: Optional[list] = None
 
+
 @router.get("/{job_name}", response_model=List[LineageEvent])
 async def get_lineage(
     job_name: str,
     limit: int = Query(default=20, le=100),
     db=Depends(get_db),
-    user_info: dict = Depends(verify_access)
+    user_info: dict = Depends(verify_access),
 ):
     """
     Query data lineage events for a specific job.
@@ -33,6 +35,7 @@ async def get_lineage(
            FROM lineage_events
            WHERE job_name ILIKE $1
            ORDER BY event_time DESC LIMIT $2""",
-        f"%{job_name}%", limit
+        f"%{job_name}%",
+        limit,
     )
     return [dict(r) for r in records]

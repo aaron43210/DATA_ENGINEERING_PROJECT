@@ -23,7 +23,7 @@ models:
       - name: image_quality
         description: "Derived business logic: Excellent, Good, Poor"
 
-  - name: active_weather_sensors
+  - name: environmental_conditions
     description: "Gold layer data product — Climate domain (Current real-time view)"
     meta:
       domain: Climate

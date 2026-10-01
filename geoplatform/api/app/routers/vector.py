@@ -6,6 +6,7 @@ from app.auth import verify_access
 
 router = APIRouter(prefix="/vector", tags=["Vector Features"])
 
+
 class VectorRecord(BaseModel):
     id: int
     osm_id: Optional[int] = None
@@ -13,12 +14,15 @@ class VectorRecord(BaseModel):
     name: Optional[str] = None
     tags: Optional[dict] = None
 
+
 @router.get("/features", response_model=List[VectorRecord])
 async def get_vector_features(
-    feature_type: Optional[str] = Query(default=None, description="hospital, trunk, etc."),
+    feature_type: Optional[str] = Query(
+        default=None, description="hospital, trunk, etc."
+    ),
     limit: int = Query(default=100, le=500),
     db=Depends(get_db),
-    user_info: dict = Depends(verify_access)
+    user_info: dict = Depends(verify_access),
 ):
     """OSM vector features (hospitals, roads) loaded from the Bronze layer."""
     conditions = ["1=1"]

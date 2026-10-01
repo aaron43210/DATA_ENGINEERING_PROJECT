@@ -1,12 +1,10 @@
-version: "3.9"
-
 x-airflow-common: &airflow-common
   build: ./airflow
   image: geoplatform-airflow
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-    AIRFLOW__CORE__FERNET_KEY: 46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLt0nfdstY=
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?set in .env}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set in .env}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     # OpenLineage — emit lineage to DataHub
     AIRFLOW__LINEAGE__BACKEND: openlineage.airflow.backend.OpenLineageBackend
@@ -14,18 +12,18 @@ x-airflow-common: &airflow-common
     OPENLINEAGE_NAMESPACE: geoplatform.airflow
     # Service connectivity
     MINIO_ENDPOINT: http://minio:9000
-    MINIO_ACCESS_KEY: minioadmin
-    MINIO_SECRET_KEY: minioadmin
+    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set in .env}
+    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
     LAKEFS_ENDPOINT: http://lakefs:8000
-    LAKEFS_ACCESS_KEY: accesskey
-    LAKEFS_SECRET_KEY: secretkey
+    LAKEFS_ACCESS_KEY: ${LAKEFS_ACCESS_KEY:?set in .env}
+    LAKEFS_SECRET_KEY: ${LAKEFS_SECRET_KEY:?set in .env}
     POSTGRES_HOST: postgres
     POSTGRES_DB: geoplatform
     POSTGRES_USER: geoplatform
-    POSTGRES_PASSWORD: geoplatform
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
     REDPANDA_BROKERS: redpanda:9092
-    MONGO_URI: mongodb://admin:admin@mongodb:27017
-    OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-demo}
+    MONGO_URI: mongodb://${MONGO_ROOT_USER:?set in .env}:${MONGO_ROOT_PASSWORD:?set in .env}@mongodb:27017
+    OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:?set in .env}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - airflow_logs:/opt/airflow/logs
@@ -41,8 +39,9 @@ services:
     image: postgis/postgis:16-3.4
     environment:
       POSTGRES_USER: geoplatform
-      POSTGRES_PASSWORD: geoplatform
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
       POSTGRES_DB: geoplatform
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/init_db:/docker-entrypoint-initdb.d
@@ -58,8 +57,8 @@ services:
     ports:
       - "27017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: admin
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?set in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set in .env}
     volumes:
       - mongo_data:/data/db
 
@@ -68,8 +67,8 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
     volumes:
       - minio_data:/data
     ports:
@@ -87,7 +86,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:?set in .env} ${MINIO_ROOT_PASSWORD:?set in .env};
       mc mb local/geoplatform-bronze --ignore-existing;
       mc mb local/geoplatform-silver --ignore-existing;
       mc mb local/geoplatform-gold --ignore-existing;
@@ -100,16 +99,16 @@ services:
     ports:
       - "8000:8000"
     environment:
-      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: my-local-secret-key
+      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ${LAKEFS_AUTH_ENCRYPT_SECRET_KEY:?set in .env}
       LAKEFS_DATABASE_TYPE: local
       LAKEFS_BLOCKSTORE_TYPE: s3
       LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
       LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
-      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: minioadmin
-      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: minioadmin
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
       LAKEFS_INSTALLATION_USER_NAME: admin
-      LAKEFS_INSTALLATION_ACCESS_KEY_ID: accesskey
-      LAKEFS_INSTALLATION_SECRET_ACCESS_KEY: secretkey
+      LAKEFS_INSTALLATION_ACCESS_KEY_ID: ${LAKEFS_ACCESS_KEY:?set in .env}
+      LAKEFS_INSTALLATION_SECRET_ACCESS_KEY: ${LAKEFS_SECRET_KEY:?set in .env}
     depends_on:
       minio-setup:
         condition: service_completed_successfully
@@ -122,8 +121,8 @@ services:
     ports:
       - "8182:8181"
     environment:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
       AWS_REGION: us-east-1
       CATALOG_WAREHOUSE: s3://geoplatform-silver/iceberg
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
@@ -181,6 +180,12 @@ services:
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: geoplatform
+      POSTGRES_USER: geoplatform
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
     volumes:
       - ./flink/jobs:/opt/flink/jobs
 
@@ -192,6 +197,12 @@ services:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 2
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: geoplatform
+      POSTGRES_USER: geoplatform
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
     depends_on:
       - flink-jobmanager
     volumes:
@@ -217,7 +228,7 @@ services:
     command: >
       bash -c "
         airflow db migrate &&
-        airflow users create --username admin --password admin
+        airflow users create --username admin --password ${AIRFLOW_ADMIN_PASSWORD:?set in .env}
           --firstname Admin --lastname User
           --role Admin --email admin@example.com
       "
@@ -230,7 +241,7 @@ services:
     volumes:
       - datahub_data:/var/datahub
     environment:
-      DATAHUB_SECRET: YouKnowNothing
+      DATAHUB_SECRET: ${DATAHUB_SECRET:?set in .env}
 
   # ── FastAPI + GraphQL ────────────────────────────────────────────
   api:
@@ -239,20 +250,21 @@ services:
     ports:
       - "8000:8000"
     environment:
-      POSTGRES_DSN: postgresql+asyncpg://geoplatform:geoplatform@postgres:5432/geoplatform
+      POSTGRES_DSN: postgresql+asyncpg://geoplatform:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/geoplatform
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set in .env}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
       BUCKET_BRONZE: geoplatform-bronze
       BUCKET_SILVER: geoplatform-silver
       LAKEFS_ENDPOINT: http://lakefs:8000
-      LAKEFS_ACCESS_KEY: accesskey
-      LAKEFS_SECRET_KEY: secretkey
+      LAKEFS_ACCESS_KEY: ${LAKEFS_ACCESS_KEY:?set in .env}
+      LAKEFS_SECRET_KEY: ${LAKEFS_SECRET_KEY:?set in .env}
       ICEBERG_REST_URI: http://iceberg-rest:8181
-      MONGO_URI: mongodb://admin:admin@mongodb:27017
+      MONGO_URI: mongodb://${MONGO_ROOT_USER:?set in .env}:${MONGO_ROOT_PASSWORD:?set in .env}@mongodb:27017
       REDPANDA_BROKERS: redpanda:9092
-      JWT_SECRET: super-secret-jwt-key-change-in-production
-      API_KEY: supersecretapikey123
+      JWT_SECRET: ${JWT_SECRET:?set in .env}
+      API_KEY: ${API_KEY:?set in .env}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -275,7 +287,7 @@ services:
     environment:
       REDPANDA_BROKERS: redpanda:9092
       SCHEMA_REGISTRY_URL: http://redpanda:8081
-      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-demo}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:?set in .env}
       POLL_INTERVAL_SECONDS: "60"
     depends_on:
       redpanda:
@@ -296,8 +308,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_ALERTING_ENABLED: "true"
     volumes:
       - grafana_data:/var/lib/grafana

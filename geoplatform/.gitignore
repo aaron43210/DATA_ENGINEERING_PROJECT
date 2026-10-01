@@ -1,0 +1,30 @@
+# ── Secrets / environment ────────────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# ── dbt ──────────────────────────────────────────────────────────────────────
+dbt/geoplatform/target/
+dbt/geoplatform/dbt_packages/
+dbt/geoplatform/logs/
+
+# ── Great Expectations ───────────────────────────────────────────────────────
+**/great_expectations/uncommitted/
+
+# ── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+.idea/
+.vscode/

@@ -6,6 +6,7 @@ from app.auth import verify_access, mask_pii
 
 router = APIRouter(prefix="/sensors", tags=["IoT Sensors"])
 
+
 class SensorRecord(BaseModel):
     sensor_id: str
     event_time: str
@@ -20,14 +21,17 @@ class SensorRecord(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
+
 @router.get("/", response_model=List[SensorRecord])
 async def get_sensors(
     sensor_id: Optional[str] = Query(default=None),
-    measurement_type: Optional[str] = Query(default=None, description="temperature, humidity, soil_moisture, air_quality"),
+    measurement_type: Optional[str] = Query(
+        default=None, description="temperature, humidity, soil_moisture, air_quality"
+    ),
     anomalies_only: bool = Query(default=False),
     limit: int = Query(default=100, le=1000),
     db=Depends(get_db),
-    user_info: dict = Depends(verify_access)
+    user_info: dict = Depends(verify_access),
 ):
     """Real-time IoT sensor observations with ambient weather join and anomaly flags."""
     conditions = ["1=1"]

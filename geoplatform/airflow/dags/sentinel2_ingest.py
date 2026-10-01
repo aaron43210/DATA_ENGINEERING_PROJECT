@@ -31,14 +31,14 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 STAC_API_URL = "https://earth-search.aws.element84.com/v1/search"
-S3_ENDPOINT  = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
-BUCKET       = "geoplatform-bronze"
+S3_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
+BUCKET = "geoplatform-bronze"
 
 POSTGRES = {
-    "host":     os.environ.get("POSTGRES_HOST", "postgres"),
-    "port":     5432,
-    "dbname":   os.environ.get("POSTGRES_DB", "geoplatform"),
-    "user":     os.environ.get("POSTGRES_USER", "geoplatform"),
+    "host": os.environ.get("POSTGRES_HOST", "postgres"),
+    "port": 5432,
+    "dbname": os.environ.get("POSTGRES_DB", "geoplatform"),
+    "user": os.environ.get("POSTGRES_USER", "geoplatform"),
     "password": os.environ.get("POSTGRES_PASSWORD", "geoplatform"),
 }
 
@@ -56,10 +56,11 @@ default_args = {
 
 # ── Tasks ──────────────────────────────────────────────────────────────────────
 
+
 def extract_stac_data(**context):
     """EXTRACT: Fetch Sentinel-2 STAC metadata for the last 24 hours."""
     execution_date = context["execution_date"]
-    
+
     # We query the previous day based on the DAG run date
     start_date = (execution_date - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
     end_date = execution_date.strftime("%Y-%m-%dT00:00:00Z")
@@ -69,7 +70,7 @@ def extract_stac_data(**context):
         "collections": ["sentinel-2-c1-l2a"],
         "bbox": BBOX,
         "datetime": time_range,
-        "limit": 100
+        "limit": 100,
     }
 
     logger.info(f"Querying STAC API for {time_range} with bbox {BBOX}")
@@ -86,7 +87,7 @@ def extract_stac_data(**context):
 
 def transform_and_load_bronze(**context):
     """
-    TRANSFORM & LOAD (Raw): 
+    TRANSFORM & LOAD (Raw):
     1. Filter out scenes with > 80% cloud cover.
     2. Upload raw JSON to MinIO Bronze bucket.
     """
@@ -95,13 +96,14 @@ def transform_and_load_bronze(**context):
     date_prefix = execution_date.strftime("%Y/%m/%d")
 
     s3 = boto3.client(
-        "s3", endpoint_url=S3_ENDPOINT,
+        "s3",
+        endpoint_url=S3_ENDPOINT,
         aws_access_key_id=os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
-        aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin")
+        aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin"),
     )
 
     transformed = []
-    
+
     for scene in raw_scenes:
         props = scene.get("properties", {})
         cloud_pct = props.get("eo:cloud_cover", 100)
@@ -111,31 +113,35 @@ def transform_and_load_bronze(**context):
             continue
 
         scene_id = scene.get("id")
-        
+
         # LOAD: Write raw JSON to MinIO
         key = f"sentinel2/{date_prefix}/{scene_id}.json"
-        
+
         # Check if bucket exists, create if not (fail-safe for local dev)
         try:
             s3.head_bucket(Bucket=BUCKET)
-        except:
+        except Exception:
             s3.create_bucket(Bucket=BUCKET)
 
         s3.put_object(
-            Bucket=BUCKET, Key=key,
-            Body=json.dumps(scene), ContentType="application/json"
+            Bucket=BUCKET,
+            Key=key,
+            Body=json.dumps(scene),
+            ContentType="application/json",
         )
-        
+
         # Build clean dict for PostGIS
-        transformed.append({
-            "scene_id": scene_id,
-            "satellite": "Sentinel-2",
-            "acquisition_time": props.get("datetime"),
-            "cloud_percentage": cloud_pct,
-            "crs": "EPSG:4326",
-            "s3_bronze_path": f"s3://{BUCKET}/{key}",
-            "geometry": scene.get("geometry")
-        })
+        transformed.append(
+            {
+                "scene_id": scene_id,
+                "satellite": "Sentinel-2",
+                "acquisition_time": props.get("datetime"),
+                "cloud_percentage": cloud_pct,
+                "crs": "EPSG:4326",
+                "s3_bronze_path": f"s3://{BUCKET}/{key}",
+                "geometry": scene.get("geometry"),
+            }
+        )
 
     logger.info(f"Transformed and loaded {len(transformed)} scenes to Bronze layer")
     context["ti"].xcom_push(key="clean_scenes", value=transformed)
@@ -146,7 +152,9 @@ def load_to_postgis_and_lakefs(**context):
     LOAD (Clean): Write transformed data to PostGIS.
     Also trigger a LakeFS commit to snapshot this ingestion run.
     """
-    clean_scenes = context["ti"].xcom_pull(key="clean_scenes", task_ids="transform_and_load_bronze")
+    clean_scenes = context["ti"].xcom_pull(
+        key="clean_scenes", task_ids="transform_and_load_bronze"
+    )
     execution_date = context["execution_date"]
 
     if not clean_scenes:
@@ -155,8 +163,11 @@ def load_to_postgis_and_lakefs(**context):
 
     # 1. Trigger LakeFS Commit
     lakefs_endpoint = os.environ.get("LAKEFS_ENDPOINT", "http://lakefs:8000")
-    lakefs_auth = (os.environ.get("LAKEFS_ACCESS_KEY", "accesskey"), os.environ.get("LAKEFS_SECRET_KEY", "secretkey"))
-    
+    lakefs_auth = (
+        os.environ.get("LAKEFS_ACCESS_KEY", "accesskey"),
+        os.environ.get("LAKEFS_SECRET_KEY", "secretkey"),
+    )
+
     commit_id = "unknown"
     try:
         commit_resp = requests.post(
@@ -167,10 +178,10 @@ def load_to_postgis_and_lakefs(**context):
                 "metadata": {
                     "dag_run": str(execution_date),
                     "record_count": str(len(clean_scenes)),
-                    "source": "sentinel-2-stac-api"
-                }
+                    "source": "sentinel-2-stac-api",
+                },
             },
-            timeout=10
+            timeout=10,
         )
         if commit_resp.status_code == 201:
             commit_id = commit_resp.json().get("id", "unknown")
@@ -185,11 +196,11 @@ def load_to_postgis_and_lakefs(**context):
     for scene in clean_scenes:
         # Convert GeoJSON geometry to PostGIS EWKT
         geom_json = json.dumps(scene["geometry"])
-        
+
         cur.execute(
             """
             INSERT INTO satellite_observations
-                (scene_id, satellite, acquisition_time, cloud_percentage, 
+                (scene_id, satellite, acquisition_time, cloud_percentage,
                  crs, s3_bronze_path, lakefs_commit_id, bbox)
             VALUES (%s, %s, %s, %s, %s, %s, %s, ST_GeomFromGeoJSON(%s))
             ON CONFLICT (scene_id) DO UPDATE SET
@@ -197,10 +208,15 @@ def load_to_postgis_and_lakefs(**context):
                 lakefs_commit_id = EXCLUDED.lakefs_commit_id
             """,
             (
-                scene["scene_id"], scene["satellite"], scene["acquisition_time"], 
-                scene["cloud_percentage"], scene["crs"], scene["s3_bronze_path"], 
-                commit_id, geom_json
-            )
+                scene["scene_id"],
+                scene["satellite"],
+                scene["acquisition_time"],
+                scene["cloud_percentage"],
+                scene["crs"],
+                scene["s3_bronze_path"],
+                commit_id,
+                geom_json,
+            ),
         )
 
     conn.commit()
@@ -215,10 +231,10 @@ with DAG(
     dag_id="sentinel2_ingest",
     default_args=default_args,
     description="ETL DAG for Sentinel-2 STAC metadata",
-    schedule="0 2 * * *",   # Run daily at 2 AM
+    schedule="0 2 * * *",  # Run daily at 2 AM
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["etl", "satellite", "stac"]
+    tags=["etl", "satellite", "stac"],
 ) as dag:
 
     task_extract = PythonOperator(

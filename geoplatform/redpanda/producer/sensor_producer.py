@@ -10,7 +10,6 @@ Pattern: Push-based Streaming (MQTT to Kafka Bridge)
 """
 
 import os
-import time
 import json
 import logging
 from datetime import datetime, timezone
@@ -28,17 +27,27 @@ logging.basicConfig(
 logger = logging.getLogger("sensor-producer")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-REDPANDA_BROKERS    = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
+REDPANDA_BROKERS = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
 SCHEMA_REGISTRY_URL = os.environ.get("SCHEMA_REGISTRY_URL", "http://redpanda:8081")
-TOPIC               = "sensor.live"
+TOPIC = "sensor.live"
 
 # MQTT Configuration for physical sensors
-MQTT_BROKER         = os.environ.get("MQTT_BROKER", "mqtt.eclipseprojects.io")
-MQTT_PORT           = int(os.environ.get("MQTT_PORT", "1883"))
-MQTT_TOPIC          = os.environ.get("MQTT_TOPIC", "geoplatform/sensors/#")
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "mqtt.eclipseprojects.io")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "geoplatform/sensors/#")
 
 # Load Avro schema from file
 SCHEMA_STR = open(os.path.join(os.path.dirname(__file__), "sensor_event.avsc")).read()
+
+# Mapping from physical MQTT payload keys to (measurement_type, unit) pairs.
+# Each physical reading is emitted as a separate SensorEvent so that the
+# downstream stream processor can window/anomaly-detect per measurement_type.
+MEASUREMENTS = {
+    "temp": ("temperature", "celsius"),
+    "hum": ("humidity", "percent"),
+    "soil": ("soil_moisture", "raw"),
+    "aqi": ("air_quality", "aqi"),
+}
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 redpanda_producer = None
@@ -50,30 +59,36 @@ def delivery_report(err, msg):
     if err:
         logger.error(f"❌ Delivery failed for {msg.key()}: {err}")
     else:
-        logger.debug(f"✅ Delivered to {msg.topic()} [partition {msg.partition()}] offset {msg.offset()}")
+        logger.debug(
+            f"✅ Delivered to {msg.topic()} [partition {msg.partition()}] offset {msg.offset()}"
+        )
 
 
 def init_redpanda_producer():
     """Initialize Redpanda producer with Avro serializer."""
     global redpanda_producer, avro_serializer
-    
+
     schema_registry = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
     avro_serializer = AvroSerializer(schema_registry, SCHEMA_STR)
 
-    redpanda_producer = Producer({
-        "bootstrap.servers": REDPANDA_BROKERS,
-        "acks": "all",
-        "enable.idempotence": "true",
-        "retries": 5,
-        "compression.type": "snappy",
-    })
+    redpanda_producer = Producer(
+        {
+            "bootstrap.servers": REDPANDA_BROKERS,
+            "acks": "all",
+            "enable.idempotence": "true",
+            "retries": 5,
+            "compression.type": "snappy",
+        }
+    )
     logger.info("✅ Connected to Redpanda Schema Registry & Broker.")
 
 
 def on_mqtt_connect(client, userdata, flags, rc):
     """Callback when connected to MQTT Broker."""
     if rc == 0:
-        logger.info(f"✅ Connected to physical MQTT Broker at {MQTT_BROKER}:{MQTT_PORT}")
+        logger.info(
+            f"✅ Connected to physical MQTT Broker at {MQTT_BROKER}:{MQTT_PORT}"
+        )
         client.subscribe(MQTT_TOPIC)
         logger.info(f"📡 Subscribed to MQTT topic: {MQTT_TOPIC}")
     else:
@@ -84,34 +99,56 @@ def on_mqtt_connect(client, userdata, flags, rc):
 def on_mqtt_message(client, userdata, msg):
     """Callback when a physical sensor publishes a message."""
     try:
-        # Example physical payload: {"station_id": "SN_101", "temp": 28.5, "hum": 75, "soil": 400, "aqi": 35}
+        # Example physical payload:
+        #   {"station_id": "SN_101", "lat": 9.93, "lon": 76.26,
+        #    "temp": 28.5, "hum": 75, "soil": 400, "aqi": 35}
         payload = json.loads(msg.payload.decode("utf-8"))
-        station_id = payload.get("station_id", "UNKNOWN")
-        
-        # Transform physical payload to Avro Schema format
-        event = {
-            "station_id":       station_id,
-            "event_time":       int(datetime.now(timezone.utc).timestamp() * 1000),
-            "temperature_c":    float(payload.get("temp", 0.0)),
-            "humidity_pct":     float(payload.get("hum", 0.0)),
-            "soil_moisture":    int(payload.get("soil", 0)),
-            "air_quality_idx":  int(payload.get("aqi", 0)),
-        }
+        sensor_id = payload.get("station_id") or payload.get("sensor_id")
 
-        # Produce to Redpanda
-        redpanda_producer.produce(
-            topic=TOPIC,
-            key=station_id,
-            value=avro_serializer(
-                event,
-                SerializationContext(TOPIC, MessageField.VALUE)
-            ),
-            on_delivery=delivery_report,
-        )
+        if not sensor_id:
+            logger.error("❌ Dropping payload with no station_id/sensor_id")
+            return
+
+        # Location is mandatory in the schema — do not fabricate coordinates.
+        if payload.get("lat") is None or payload.get("lon") is None:
+            logger.error(f"❌ Dropping {sensor_id}: payload missing lat/lon")
+            return
+
+        latitude = float(payload["lat"])
+        longitude = float(payload["lon"])
+        event_time = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        # Emit one Avro event per present measurement, matching sensor_event.avsc.
+        emitted = 0
+        for key, (measurement_type, unit) in MEASUREMENTS.items():
+            if payload.get(key) is None:
+                continue
+
+            event = {
+                "sensor_id": sensor_id,
+                "event_time": event_time,
+                "latitude": latitude,
+                "longitude": longitude,
+                "measurement_type": measurement_type,
+                "value": float(payload[key]),
+                "unit": unit,
+            }
+
+            redpanda_producer.produce(
+                topic=TOPIC,
+                key=f"{sensor_id}_{measurement_type}",
+                value=avro_serializer(
+                    event, SerializationContext(TOPIC, MessageField.VALUE)
+                ),
+                on_delivery=delivery_report,
+            )
+            emitted += 1
+
         redpanda_producer.poll(0)  # Trigger delivery callbacks
-        
-        logger.info(f"  → Bridged physical sensor {station_id} to Redpanda (temp={event['temperature_c']}°C)")
-        
+        logger.info(
+            f"  → Bridged physical sensor {sensor_id} to Redpanda ({emitted} measurements)"
+        )
+
     except json.JSONDecodeError:
         logger.error("❌ Received malformed MQTT payload (not JSON)")
     except Exception as e:
@@ -121,22 +158,22 @@ def on_mqtt_message(client, userdata, msg):
 def main():
     """Main process: Connect to Redpanda, then block on MQTT loop."""
     logger.info("🚀 Starting Physical IoT Sensor Bridge (MQTT → Redpanda)")
-    
+
     # 1. Init Redpanda
     init_redpanda_producer()
-    
+
     # 2. Init MQTT Client
     mqtt_client = mqtt.Client(client_id="geoplatform_bridge")
     mqtt_client.on_connect = on_mqtt_connect
     mqtt_client.on_message = on_mqtt_message
-    
+
     logger.info(f"Connecting to MQTT Broker {MQTT_BROKER}...")
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
     except Exception as e:
         logger.fatal(f"Could not connect to hardware MQTT broker: {e}")
         raise
-        
+
     # 3. Block forever listening to physical hardware
     try:
         mqtt_client.loop_forever()

@@ -4,10 +4,10 @@ geoplatform:
     dev:
       type: postgres
       host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
-      port: 5432
-      user: geoplatform
-      password: geoplatform
-      dbname: geoplatform
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      user: "{{ env_var('POSTGRES_USER', 'geoplatform') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'geoplatform') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'geoplatform') }}"
       schema: dbt_geoplatform
       threads: 4
   

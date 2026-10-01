@@ -2,11 +2,18 @@ import os
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 import jwt
-from datetime import datetime, timedelta, timezone
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-in-production")
-API_KEY = os.environ.get("API_KEY", "supersecretapikey123")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+API_KEY = os.environ.get("API_KEY")
 ALGORITHM = "HS256"
+
+# Fail closed: refuse to start without explicitly configured secrets rather
+# than falling back to well-known defaults (architecture.md §16).
+if not JWT_SECRET or not API_KEY:
+    raise RuntimeError(
+        "JWT_SECRET and API_KEY must both be set in the environment. "
+        "Refusing to start with insecure default credentials."
+    )
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -18,20 +25,22 @@ GDPR_MASKED_FIELDS = {
     "weather_stream_observations": ["latitude", "longitude"],
 }
 
+
 def mask_pii(data: dict, table: str, is_privileged: bool = False) -> dict:
     """Apply GDPR field-level masking for non-privileged users."""
     if is_privileged:
         return data
-    
+
     fields_to_mask = GDPR_MASKED_FIELDS.get(table, [])
     for field in fields_to_mask:
         if field in data and data[field] is not None:
             if isinstance(data[field], float):
-                # Truncate to 3 decimal places (city-level precision only)
-                data[field] = round(data[field], 3)
+                # Truncate to 2 decimal places (~1 km, city-level precision only)
+                data[field] = round(data[field], 2)
             else:
                 data[field] = "***MASKED***"
     return data
+
 
 def verify_access(
     api_key: str = Security(api_key_header),
@@ -41,19 +50,21 @@ def verify_access(
     # API Key auth
     if api_key and api_key == API_KEY:
         return {"user": "api-key-user", "role": "admin", "privileged": True}
-    
+
     # JWT auth
     if credentials:
         try:
-            payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[ALGORITHM])
+            payload = jwt.decode(
+                credentials.credentials, JWT_SECRET, algorithms=[ALGORITHM]
+            )
             return {
                 "user": payload["sub"],
                 "role": payload.get("role", "reader"),
-                "privileged": payload.get("role") == "admin"
+                "privileged": payload.get("role") == "admin",
             }
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expired")
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401, detail="Invalid token")
-            
+
     raise HTTPException(status_code=401, detail="No authentication provided")
