@@ -9,8 +9,8 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                           DATA SOURCES                                       ║
 ╠═══════════════╦══════════════════╦════════════════╦═══════════════════════════╣
-║ Sentinel-2    ║ OpenWeatherMap   ║ OSM Overpass   ║ IoT Sensors (simulated)   ║
-║ STAC API      ║ REST API         ║ REST API       ║ 3 stations — Kerala       ║
+║ Sentinel-2    ║ OpenWeatherMap   ║ OSM Overpass   ║ IoT Sensors (MQTT)        ║
+║ STAC API      ║ REST API         ║ REST API       ║ hardware MQTT broker      ║
 ║ GeoJSON       ║ JSON — every 60s ║ JSON — weekly  ║ Avro — sub-second         ║
 ║ [Batch ETL]   ║ [Stream+Batch]   ║ [Batch ELT]    ║ [Streaming]               ║
 ╚══════╤════════╩═════════╤════════╩═══════╤════════╩══════════════╤════════════╝
@@ -23,12 +23,12 @@
 ║  │   Aaron: sentinel2_ingest.py (ETL)  │   │   Aaron: sensor_producer.py  │  ║
 ║  │   Aaron: weather_backfill.py (ELT)  │   │   Aaron: weather_producer.py │  ║
 ║  │   Angel: osm_vector_ingest.py (ELT) │   │   Topics:                    │  ║
-║  │   Angel: data_quality_dag.py        │   │   • sensor.temperature        │  ║
-║  └──────────────────┬──────────────────┘   │   • sensor.humidity           │  ║
-║                     │                       │   • sensor.soil_moisture      │  ║
-║                     │                       │   • sensor.air_quality        │  ║
-║                     │                       │   • weather.live              │  ║
+║  │   Angel: data_quality_dag.py        │   │   • sensor.live               │  ║
+║  └──────────────────┬──────────────────┘   │   • weather.live              │  ║
 ║                     │                       │   • platform.quality.alerts   │  ║
+║                     │                       │                               │  ║
+║                     │                       │                               │  ║
+║                     │                       │                               │  ║
 ║                     │                       └──────────────┬───────────────┘  ║
 ╚═════════════════════╪═══════════════════════════════════════╪══════════════════╝
                       │                                       │
@@ -139,7 +139,7 @@
 
 ---
 
-## All 51 Files — Owner Table
+## All Files — Owner Table (51 original + 4 added = 55)
 
 | # | File | Owner | Service |
 |---|------|-------|---------|
@@ -195,6 +195,17 @@
 | 50 | `redpanda/weather_producer/weather_producer.py` | Aaron | Redpanda |
 | 51 | `setup.sh` | Angel | Infrastructure |
 
+**Added during production-readiness hardening (not in the original 51):**
+
+| # | File | Owner | Service | Note |
+|---|------|-------|---------|------|
+| 52 | `.env.example` | Fidal | Infrastructure | Committed template; real `.env` is now git-ignored |
+| 53 | `.gitignore` | Fidal | Infrastructure | Keeps `.env` and secrets out of git |
+| 54 | `dbt/geoplatform/macros/generate_schema_name.sql` | Aaron | dbt | Forces bare schema names so API `marts.*` / `staging.*` reads resolve |
+| 55 | `api/tests/conftest.py` | Adhityan | Testing | Sets `JWT_SECRET`/`API_KEY` before `app` import (auth fails closed) |
+
+> `.github/workflows/ci.yml` moved from `geoplatform/.github/workflows/` to the **repo root** so GitHub Actions discovers it.
+
 ---
 
 ## 📘 AARON — Files + Functions
@@ -243,9 +254,9 @@
 **`mask_pii(data, table, is_privileged)`**
 | | |
 |---|---|
-| Purpose | GDPR — truncates GPS coordinates to 3dp for non-admin users |
+| Purpose | GDPR — truncates GPS coordinates to 2dp for non-admin users |
 | Input | `data: dict` (one DB row), `table: str`, `is_privileged: bool` |
-| Output | Same `dict` with lat/lon truncated to 3dp or `"***MASKED***"` |
+| Output | Same `dict` with lat/lon truncated to 2dp or `"***MASKED***"` |
 | Called by | `weather.py`, `sensors.py`, `graphql_schema.py` |
 
 #### `api/app/db/postgis.py`
@@ -296,48 +307,64 @@
 
 ### SERVICE: Redpanda — Producers (Aaron + Lubaba)
 
-#### `sensor_producer.py`
+#### `sensor_producer.py` — MQTT → Redpanda bridge
+
+**`init_redpanda_producer()`**
+| | |
+|---|---|
+| Purpose | Init Confluent Kafka producer + Avro serializer (sets module globals) |
+| Input | `REDPANDA_BROKERS`, `SCHEMA_REGISTRY_URL` env vars; reads `sensor_event.avsc` |
+| Output | Confluent `Producer` + `AvroSerializer` — snappy compression, acks=all, idempotent |
+
+**`on_mqtt_message(client, userdata, msg)`**
+| | |
+|---|---|
+| Purpose | Bridge one physical MQTT payload into Avro events on Redpanda |
+| Input | MQTT message — JSON payload `{station_id, lat, lon, temp, hum, soil, aqi}` |
+| Validation | Drops payloads with no `station_id`/`sensor_id` or missing `lat`/`lon` (no fabricated coordinates) |
+| Output | One Avro event **per present measurement** → topic `sensor.live`, key `{sensor_id}_{measurement_type}` |
+
+**`main()`**
+| | |
+|---|---|
+| Purpose | Connect to Redpanda, then block on the MQTT `loop_forever()` listener |
+| Output topic | `sensor.live` (single topic; `measurement_type` discriminates temp/humidity/soil/aqi) |
+| Event format | `{sensor_id, event_time(ms), latitude, longitude, measurement_type, value, unit}` (Avro) |
+| Source | Real hardware MQTT broker (`MQTT_BROKER`/`MQTT_TOPIC` env) — No Mock Data Policy, no simulated readings |
+| Key | `{sensor_id}_{measurement_type}` |
+
+#### `weather_producer.py`
+
+**`fetch_weather(station)`**
+| | |
+|---|---|
+| Input | `station: {station_id, city_name, lat, lon}` |
+| Auth | Raises `ValueError` if `OPENWEATHER_API_KEY` is unset/`demo` (No Mock Data Policy) |
+| Retry | `tenacity` — 3 attempts, exponential backoff |
+| Output | Parsed OWM reading `dict` or `None` on timeout/HTTP error |
+
+**`assign_quality_flag(station_id, data)`**
+| | |
+|---|---|
+| Input | `station_id` string, parsed reading dict |
+| Output | `"GOOD"` / `"STALE"` / `"ANOMALY"` (API failures are flagged `"API_ERROR"` in `main()`) |
+
+**`build_avro_event(station, data, quality_flag)`**
+| | |
+|---|---|
+| Input | station config + reading dict + quality flag |
+| Output | `dict` with 13 fields matching `weather_event.avsc` |
 
 **`create_producer()`**
 | | |
 |---|---|
-| Purpose | Init Confluent Kafka producer + Avro serializer |
-| Input | `REDPANDA_BROKERS`, `SCHEMA_REGISTRY_URL` env vars; reads `sensor_event.avsc` |
-| Output | `(confluent_kafka.Producer, AvroSerializer)` — snappy compression, acks=all |
+| Purpose | Init Confluent `Producer` + `AvroSerializer` against Schema Registry |
+| Output | `(Producer, AvroSerializer)` — snappy, acks=all, idempotent |
 
 **`main()`**
 | | |
 |---|---|
-| Purpose | Infinite loop producing IoT sensor events |
-| Output topics | `sensor.temperature`, `sensor.humidity`, `sensor.soil_moisture`, `sensor.air_quality` |
-| Event format | `{sensor_id, event_time(ms), latitude, longitude, measurement_type, value, unit}` (Avro) |
-| Rate | Every 0.5–2.0 seconds per sensor; 2% chance 3× anomaly injection |
-| Key | `sensor_id` |
-
-#### `weather_producer.py`
-
-**`fetch_weather_data(session, station)`**
-| | |
-|---|---|
-| Input | `aiohttp.ClientSession`, `station: {id, city, lat, lon}` |
-| Output | Raw OWM API `dict` or `None` on timeout/error |
-
-**`validate_weather(raw, station_id)`**
-| | |
-|---|---|
-| Input | OWM response dict, station_id string |
-| Output | `"GOOD"` / `"STALE"` / `"ANOMALY"` / `"API_ERROR"` |
-
-**`create_event(raw, station, quality_flag, poll_ms)`**
-| | |
-|---|---|
-| Input | OWM dict + station config + quality flag + poll duration |
-| Output | `dict` with 13 fields matching `weather_event.avsc` |
-
-**`main()`**
-| | |
-|---|---|
-| Purpose | Async infinite loop — polls 5 Kerala weather stations every 60s concurrently |
+| Purpose | Synchronous polling loop — polls 5 Kerala weather stations every 60s |
 | Output topic | `weather.live` — key: `station_id` |
 
 ---
@@ -430,7 +457,7 @@
 **`Query.imagery(max_cloud_pct, limit)`**
 | | |
 |---|---|
-| Input | `max_cloud_pct: float = 100.0`, `limit: int = 50` |
+| Input | `max_cloud_pct: float = 50.0`, `limit: int = 50` |
 | DB | `marts.satellite_observation` |
 | Output | `List[SatelliteObservation]` — 5 fields |
 
@@ -502,8 +529,8 @@
 **`process_sensor_event(msg, pg_cur, alert_producer)`**
 | | |
 |---|---|
-| Input | raw Kafka message (`sensor.*`), open DB cursor, alert producer |
-| Steps | parse JSON → Z-score → window stats → spatial join → INSERT |
+| Input | Avro message from `sensor.live`, open DB cursor, alert producer |
+| Steps | deserialize Avro (Schema Registry) → Z-score → window stats → spatial join → INSERT |
 | DB INSERT | `sensor_observations` — 15 fields incl. `is_anomaly`, `nearest_weather_station`, `ambient_temperature_c` |
 | Side effect | anomaly → calls Angel's `publish_quality_alert()` |
 
@@ -511,7 +538,7 @@
 | | |
 |---|---|
 | Input | raw Kafka message (`weather.live`), open DB cursor, alert producer |
-| Steps | parse JSON → update `_latest_weather` cache → Z-score → window stats → INSERT |
+| Steps | deserialize Avro → update `_latest_weather` cache → Z-score → window stats → INSERT |
 | DB INSERT | `weather_stream_observations` — 17 fields incl. `window_avg_temp`, `is_anomaly` |
 
 **`emit_lineage_start / emit_lineage_complete / emit_lineage_fail(job, run_id)`**
@@ -524,14 +551,15 @@
 
 ### SERVICE: Testing + CI/CD (Lubaba + Adhityan, Lubaba leads)
 
-**`.github/workflows/ci.yml`** — Lubaba writes this
+**`.github/workflows/ci.yml`** — Lubaba writes this (lives at **repo root**, with `defaults.run.working-directory: geoplatform`)
 
 | Step | What it validates |
 |------|------------------|
-| `flake8` | Python lint — max-line-length 120 |
+| `flake8` | Python lint (`--ignore=E501,W503`) |
 | `black --check` | Code format |
+| `pytest api/tests` | API test suite (sets `JWT_SECRET`/`API_KEY` via conftest) |
 | `dbt parse && dbt compile` | All SQL models compile |
-| `docker compose config` | docker-compose.yml valid |
+| `docker compose config` | docker-compose.yml valid (placeholder secrets injected via job `env:`) |
 | `docker build ./api` | API Dockerfile builds |
 | OpenLineage test | Schema importable + valid |
 
@@ -606,8 +634,8 @@
 | Output | `CREATE TABLE IF NOT EXISTS` — `sensor_observations` + `weather_stream_observations` + 4 indexes |
 
 **`create_alert_producer()`**
-| Input | `KAFKA_SERVERS` env var |
-| Output | `KafkaProducer` — JSON serializer, acks=all |
+| Input | `REDPANDA_BROKERS` env var |
+| Output | `confluent_kafka.Producer` — JSON-encoded alert values, acks=all |
 
 **`publish_quality_alert(producer, source_type, event, reason)`**
 | Input | `producer`, `source_type: "sensor"/"weather"`, `event: dict`, `reason: str` |
@@ -615,7 +643,7 @@
 
 **`main()`**
 | Startup | Retry Redpanda 10× (5s delay); `ensure_tables()`; emit lineage START |
-| Consumer | `KafkaConsumer` on all 5 topics simultaneously |
+| Consumer | `confluent_kafka.Consumer` + `AvroDeserializer` on `sensor.live` + `weather.live` |
 | Routing | `weather.live` → `process_weather_event`; else → `process_sensor_event` |
 | Fault | `try/except` per message; reconnects on DB drop |
 
@@ -634,7 +662,7 @@
 | Output | LakeFS repo `geoplatform` + branches: `bronze, silver, gold, staging, main` |
 | Run | Manually once: `bash lakefs/setup_repos.sh` |
 
-**`docker-compose.yml`** — 16 services, boot order:
+**`docker-compose.yml`** — 19 services, boot order:
 ```
 Tier 1: postgres  minio  mongodb  redpanda
 Tier 2: minio-setup  lakefs  iceberg-rest
@@ -653,9 +681,10 @@ Tier 6: api  prometheus  grafana
 
 ### SERVICE: Infrastructure (Angel + Fidal)
 
-**`.env`**
-| Purpose | Env var template for docker-compose |
-| Critical var | `OPENWEATHER_API_KEY` — real OWM key or `demo` |
+**`.env`** (git-ignored — committed template is `.env.example`)
+| Purpose | Secrets + config for docker-compose; every `${VAR:?set in .env}` must be filled |
+| Critical var | `OPENWEATHER_API_KEY` — real OWM key **required**; `demo`/empty fails fast (No Mock Data Policy) |
+| Also required | `POSTGRES_PASSWORD`, `AIRFLOW_DB_PASSWORD`, `JWT_SECRET`, `API_KEY`, MinIO/LakeFS/Mongo/Grafana secrets |
 
 **`openlineage/config/openlineage.yml`**
 | Purpose | Airflow → DataHub lineage transport config |
@@ -717,13 +746,13 @@ Tier 6: api  prometheus  grafana
 | Expected | `401` |
 
 **`test_datasets_authorized()`**
-| Input | `GET /datasets` with `X-API-Key: supersecretapikey123` |
-| Expected | `200` |
+| Input | `GET /datasets` with `X-API-Key` = the `API_KEY` env value (set by `conftest.py`) |
+| Expected | `200` (or `500` if DB not reachable in CI) |
 
 *Adhityan to add:*
 - `test_imagery_cloud_filter()` — assert all `cloud_percentage <= max_cloud_pct`
 - `test_sensors_anomaly_only()` — assert all `is_anomaly == true`
-- `test_weather_gdpr_masking()` — reader JWT returns lat/lon ≤ 3dp
+- `test_weather_gdpr_masking()` — reader JWT returns lat/lon ≤ 2dp
 - `test_graphql_imagery()` — POST `/graphql`, assert valid response shape
 
 ---
@@ -733,7 +762,7 @@ Tier 6: api  prometheus  grafana
 | # | From | To | Contract |
 |---|------|----|---------|
 | C1 | Lubaba (Flink) | Aaron (dbt) | `weather_stream_observations` columns match `stg_weather.sql` exactly |
-| C2 | Aaron (producers) | Lubaba (Flink) | Topic names `sensor.*` + `weather.live` must not change |
+| C2 | Aaron (producers) | Lubaba (Flink) | Topic names `sensor.live` + `weather.live` must not change; both Avro via Schema Registry |
 | C3 | Aaron (dbt mart) | Aaron (API) | `satellite_observation.satellite_name` aliased as `satellite` in router |
 | C4 | Angel (infra) | Everyone | Hostnames: `postgres:5432` `redpanda:9092` `minio:9000` `lakefs:8000` |
 | C5 | Angel (init_db) | Aaron + Lubaba | Tables must exist before any DAG or Flink write |
@@ -773,7 +802,7 @@ docker compose exec airflow-webserver airflow dags trigger data_quality_dag
 # AARON — Run dbt + start API ─────────────────────────────────────────────
 cd dbt/geoplatform && dbt run --profiles-dir . && cd ../..
 docker compose up -d api
-curl -H "X-API-Key: supersecretapikey123" http://localhost:8000/datasets
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/datasets   # key from .env
 open http://localhost:8000/docs      # Swagger — all 7 endpoints
 open http://localhost:8000/graphql   # GraphQL playground
 
@@ -787,9 +816,9 @@ cd api && pip install pytest httpx && pytest tests/test_main.py -v
 
 | Name | Files | Services |
 |------|-------|---------|
-| **Aaron** | 22 | FastAPI (core) · dbt (staging + satellite mart) · Redpanda (producers) · Airflow (ETL + ELT) |
+| **Aaron** | 23 | FastAPI (core) · dbt (staging + satellite mart + schema macro) · Redpanda (producers) · Airflow (ETL + ELT) |
 | **Lubaba** | 10 | FastAPI (GraphQL + 2 routers) · Redpanda (console + schema ref) · Flink (algorithms) · CI/CD |
 | **Angel** | 13 | dbt (spatial + climate mart) · Airflow (OSM + quality DAGs) · Flink (infra + loop) · Infrastructure |
-| **Fidal** | 6 | Infrastructure (`.env`, openlineage) · Monitoring (prometheus, alerts, grafana config) |
-| **Adhityan** | 2 | Monitoring (Grafana dashboard) · Testing (pytest suite) |
-| **TOTAL** | **51** | All services covered ✅ |
+| **Fidal** | 8 | Infrastructure (`.env`, `.env.example`, `.gitignore`, openlineage) · Monitoring (prometheus, alerts, grafana config) |
+| **Adhityan** | 3 | Monitoring (Grafana dashboard) · Testing (pytest suite + conftest) |
+| **TOTAL** | **55** | All services covered ✅ |

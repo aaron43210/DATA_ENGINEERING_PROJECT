@@ -47,7 +47,7 @@ def get_auth_status(info: Info) -> dict:
 class Query:
     @strawberry.field
     async def imagery(
-        self, info: Info, max_cloud_pct: float = 100.0, limit: int = 50
+        self, info: Info, max_cloud_pct: float = 50.0, limit: int = 50
     ) -> List[SatelliteObservation]:
         """Query the satellite_observation Data Product."""
         db = info.context["db"]
