@@ -1,0 +1,178 @@
+name: lubaba-redpanda-pipeline
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: [redpanda, start, --mode, dev-container, --smp, "1", --memory, 512M, --reserve-memory, 0M, --node-id, "0", --kafka-addr, "internal://0.0.0.0:9092,external://0.0.0.0:9093", --advertise-kafka-addr, "internal://redpanda:9092,external://localhost:9093", --schema-registry-addr, http://0.0.0.0:8081]
+    ports: ["9093:9093", "8081:8081"]
+    volumes: [redpanda_data:/var/lib/redpanda/data]
+    healthcheck:
+      test: [CMD, rpk, cluster, info]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  topic-setup:
+    image: redpandadata/redpanda:latest
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        for topic in sensor.live weather.live sensor.dead-letter platform.quality.alerts; do
+          rpk topic create "$$topic" --brokers redpanda:9092 || rpk topic describe "$$topic" --brokers redpanda:9092;
+        done
+  sensor-producer:
+    build: ./redpanda/producer
+    restart: on-failure
+    environment:
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      MQTT_BROKER: ${MQTT_BROKER-}
+      MQTT_PORT: ${MQTT_PORT:-8883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-geoplatform/sensors/#}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      MQTT_TLS: ${MQTT_TLS:-true}
+      MQTT_USERNAME: ${MQTT_USERNAME-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD-}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID-}
+      MQTT_CA_CERT: ${MQTT_CA_CERT-}
+      MQTT_CLIENT_CERT: ${MQTT_CLIENT_CERT-}
+      MQTT_CLIENT_KEY: ${MQTT_CLIENT_KEY-}
+      MQTT_KEY_PASSWORD: ${MQTT_KEY_PASSWORD-}
+    volumes:
+      - ${MQTT_CERTS_DIR:-./mqtt-certs}:/run/mqtt-certs:ro
+    depends_on:
+      topic-setup:
+        condition: service_completed_successfully
+    profiles: [sensor]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD-}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/001_sensor_pipeline.sql:/docker-entrypoint-initdb.d/01_sensor_pipeline.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    profiles: [pipeline]
+  flink-jobmanager:
+    build: ./flink
+    command: jobmanager
+    ports: ["8083:8081"]
+    restart: unless-stopped
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+        rest.bind-address: 0.0.0.0
+        jobmanager.memory.process.size: 1024m
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.checkpoints.num-retained: 3
+        execution.checkpointing.interval: 10s
+        execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+        restart-strategy.type: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 5s
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD-}
+    volumes:
+      - flink_checkpoints:/opt/flink/checkpoints
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8081/overview]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    profiles: [pipeline]
+  flink-taskmanager:
+    build: ./flink
+    command: taskmanager
+    restart: unless-stopped
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.memory.process.size: 1024m
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD-}
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    volumes:
+      - flink_checkpoints:/opt/flink/checkpoints
+    profiles: [pipeline]
+  flink-job-submit:
+    build: ./flink
+    restart: unless-stopped
+    entrypoint: [/bin/bash, /opt/flink/jobs/submit_and_monitor.sh]
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+        rest.bind-address: 0.0.0.0
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD-}
+      SENSOR_TOPIC: sensor.live
+      DLT_TOPIC: sensor.dead-letter
+      KAFKA_GROUP_ID: lubaba-sensor-flink
+      WATERMARK_OUT_OF_ORDER_SECONDS: "10"
+      CHECKPOINT_INTERVAL_MS: "10000"
+      FLINK_PARALLELISM: "1"
+    depends_on:
+      topic-setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      flink-jobmanager:
+        condition: service_healthy
+      flink-taskmanager:
+        condition: service_started
+    profiles: [pipeline]
+  weather-producer:
+    build: ./redpanda/weather_producer
+    environment:
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY-}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      MAX_WEATHER_AGE_SECONDS: ${MAX_WEATHER_AGE_SECONDS:-900}
+    depends_on:
+      topic-setup:
+        condition: service_completed_successfully
+    profiles: [weather]
+  redpanda-console:
+    image: redpandadata/console:latest
+    ports: ["8088:8080"]
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+    volumes: [./redpanda/console-config.yml:/tmp/config.yml:ro]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    profiles: [console]
+volumes:
+  redpanda_data:
+  postgres_data:
+  flink_checkpoints:
