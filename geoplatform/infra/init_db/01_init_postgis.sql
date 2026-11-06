@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS satellite_observations (
     crs VARCHAR(50),
     s3_bronze_path TEXT,       -- raw JSON in MinIO bronze
     s3_silver_path TEXT,       -- Parquet in MinIO silver (Iceberg)
-    lakefs_commit_id TEXT,     -- LakeFS commit for this version
     bbox GEOMETRY(POLYGON, 4326),
     ingested_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -37,7 +36,7 @@ CREATE TABLE IF NOT EXISTS weather_observations (
 -- Vector features (OSM roads, boundaries)
 CREATE TABLE IF NOT EXISTS vector_features (
     id SERIAL PRIMARY KEY,
-    osm_id BIGINT,
+    osm_id BIGINT UNIQUE,
     feature_type VARCHAR(50),
     name TEXT,
     tags JSONB,
@@ -108,13 +107,15 @@ CREATE TABLE IF NOT EXISTS quality_runs (
     id SERIAL PRIMARY KEY,
     dataset VARCHAR(100),
     suite VARCHAR(100),
+    logical_date TIMESTAMPTZ NOT NULL,
     run_time TIMESTAMPTZ DEFAULT NOW(),
     pass_rate FLOAT,
     total_expectations INT,
     passed_expectations INT,
     failed_expectations INT,
     quarantine_count INT DEFAULT 0,
-    details JSONB
+    details JSONB,
+    UNIQUE(dataset, suite, logical_date)
 );
 
 -- Data Mesh: Data Product registry (Data-as-a-Product)
