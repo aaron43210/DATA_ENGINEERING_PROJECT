@@ -1,18 +1,16 @@
 """
 Airflow DAG: weather_historical_backfill
 =========================================
-PURPOSE: Historical batch loading ONLY.
-  - This DAG is for backfilling historical weather data into the data lake.
-  - Live/real-time weather is now handled by the Redpanda weather producer
-    + Flink unified stream processor (weather.live topic).
+PURPOSE: Historical batch loading ONLY. Live/real-time weather is handled by
+the Redpanda weather producer + Flink (weather.live topic).
 
-When to run this DAG:
-  - On first platform setup (to populate historical data)
-  - When recovering from a producer outage (to fill gaps)
-  - For compliance/audit purposes requiring complete historical record
+Run this DAG:
+  - on first platform setup (populate history)
+  - to recover from a producer outage (fill gaps)
+  - for compliance/audit needing a complete historical record
 
-Pattern: ELT
-  Extract → Load raw JSON to MinIO Bronze → Transform in dbt
+Pattern: ELT — Extract -> land raw JSON to MinIO Bronze -> transform in dbt.
+Storage: MinIO only.
 """
 
 from __future__ import annotations
@@ -20,22 +18,25 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
-import boto3
-import psycopg2
 import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from common.config import (
+    BRONZE_BUCKET,
+    BRONZE_WEATHER,
+    BASE_DEFAULT_ARGS,
+    bronze_key,
+    get_s3_client,
+    pg_connection,
+)
+
 logger = logging.getLogger(__name__)
 
-API_KEY = os.environ.get("OPENWEATHER_API_KEY", "demo")
-BUCKET = "geoplatform-bronze"
-S3_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
-
-# NOTE: These are the same cities as the real-time producer
-# so historical and stream data align on station_id
+SOURCE = "weather"
+# Same stations as the real-time producer so batch + stream align on station_id.
 CITIES = [
     {
         "name": "Thiruvananthapuram",
@@ -49,39 +50,19 @@ CITIES = [
     {"name": "Kollam", "lat": 8.8932, "lon": 76.6141, "station_id": "WX_QLN"},
 ]
 
-POSTGRES = {
-    "host": os.environ.get("POSTGRES_HOST", "postgres"),
-    "port": 5432,
-    "dbname": os.environ.get("POSTGRES_DB", "geoplatform"),
-    "user": os.environ.get("POSTGRES_USER", "geoplatform"),
-    "password": os.environ.get("POSTGRES_PASSWORD", "geoplatform"),
-}
 
-default_args = {
-    "owner": "data-engineer",
-    "retries": 3,
-    "retry_delay": timedelta(minutes=5),
-    "retry_exponential_backoff": True,
-    "max_retry_delay": timedelta(hours=1),
-    "email_on_failure": False,
-}
-
-
-def fetch_historical_weather(**context):
-    """
-    ELT Step 1: Extract historical/current snapshot.
-    For historical backfill, this uses the current endpoint.
-    For true historical data, use OpenWeatherMap History API (paid).
-    """
-    execution_date = context["execution_date"]
-    results = []
-
-    if not API_KEY or API_KEY == "demo":
+def fetch_to_bronze(**context):
+    """EXTRACT + LAND RAW: snapshot current weather per station and write it
+    unfiltered to Bronze as JSONL. Pushes only the Bronze object key."""
+    api_key = os.environ.get("OPENWEATHER_API_KEY")
+    if not api_key or api_key == "demo":
         raise ValueError(
             "PRODUCTION ERROR: OPENWEATHER_API_KEY is missing or invalid. "
             "Mock data fallback has been removed (No Mock Data Policy)."
         )
 
+    observed_at = context["data_interval_start"].isoformat()
+    items = []
     for city in CITIES:
         try:
             resp = requests.get(
@@ -89,91 +70,64 @@ def fetch_historical_weather(**context):
                 params={
                     "lat": city["lat"],
                     "lon": city["lon"],
-                    "appid": API_KEY,
+                    "appid": api_key,
                     "units": "metric",
                 },
                 timeout=10,
             )
             resp.raise_for_status()
-            data = resp.json()
-
-            results.append(
+            items.append(
                 {
                     "station_id": city["station_id"],
                     "city_name": city["name"],
                     "latitude": city["lat"],
                     "longitude": city["lon"],
-                    "raw_response": data,
-                    "fetched_at": execution_date.isoformat(),
-                    "source": "airflow_backfill",  # distinguish from stream data
+                    "raw_response": resp.json(),
+                    "observed_at": observed_at,
+                    "source": "airflow_backfill",
                 }
             )
+        except Exception as e:  # noqa: BLE001 - one city failing must not sink the run
+            logger.error("Failed to fetch for %s: %s", city["name"], e)
 
-        except Exception as e:
-            logger.error(f"Failed to fetch for {city['name']}: {e}")
+    if not items:
+        raise RuntimeError("No weather stations fetched successfully.")
 
-    context["ti"].xcom_push(key="weather_data", value=results)
-    logger.info(f"Fetched historical weather for {len(results)} stations")
-
-
-def load_raw_to_s3(**context):
-    """ELT Step 2: Dump raw JSON to MinIO Bronze — no transformation."""
-    weather_data = context["ti"].xcom_pull(
-        key="weather_data", task_ids="fetch_historical"
+    key = bronze_key(SOURCE, context["data_interval_start"], "weather.jsonl")
+    body = "\n".join(json.dumps(it) for it in items)
+    get_s3_client().put_object(
+        Bucket=BRONZE_BUCKET,
+        Key=key,
+        Body=body.encode("utf-8"),
+        ContentType="application/x-ndjson",
     )
-    execution_date = context["execution_date"]
-    date_prefix = execution_date.strftime("%Y/%m/%d/%H")
-
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=S3_ENDPOINT,
-        aws_access_key_id=os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
-        aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin"),
-    )
-
-    for item in weather_data:
-        key = f"historical/weather/{date_prefix}/{item['station_id']}.json"
-        s3.put_object(
-            Bucket=BUCKET,
-            Key=key,
-            Body=json.dumps(item),
-            ContentType="application/json",
-        )
-        item["s3_path"] = f"s3://{BUCKET}/{key}"
-        logger.info(f"  → Uploaded {key}")
-
-    context["ti"].xcom_push(key="weather_with_paths", value=weather_data)
+    logger.info("Wrote %d stations to s3://%s/%s", len(items), BRONZE_BUCKET, key)
+    context["ti"].xcom_push(key="bronze_key", value=key)
 
 
-def load_to_postgres(**context):
-    """Load historical snapshot into weather_observations (the batch table)."""
-    weather_data = context["ti"].xcom_pull(
-        key="weather_with_paths", task_ids="load_raw_s3"
-    )
-    execution_date = context["execution_date"]
+def load_postgres(**context):
+    """LOAD: read raw Bronze JSONL and upsert into weather_observations."""
+    key = context["ti"].xcom_pull(key="bronze_key", task_ids="fetch_to_bronze")
+    if not key:
+        logger.info("No Bronze object produced; nothing to load.")
+        return
 
-    conn = psycopg2.connect(**POSTGRES)
-    cur = conn.cursor()
+    obj = get_s3_client().get_object(Bucket=BRONZE_BUCKET, Key=key)
+    lines = obj["Body"].read().decode("utf-8").splitlines()
+    s3_path = f"s3://{BRONZE_BUCKET}/{key}"
 
-    for item in weather_data:
-        raw = item["raw_response"]
-        main = raw.get("main", {})
-        wind = raw.get("wind", {})
-        clouds = raw.get("clouds", {})
-        rain = raw.get("rain", {})
-
-        cur.execute(
-            """
-            INSERT INTO weather_observations
-                (station_id, observed_at, temperature_c, humidity_pct,
-                 rainfall_mm, wind_speed_ms, cloud_cover_pct, location, raw_s3_path)
-            VALUES (%s, %s, %s, %s, %s, %s, %s,
-                    ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)
-            ON CONFLICT (station_id, observed_at) DO NOTHING
-            """,
+    rows = []
+    for line in lines:
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        raw = item.get("raw_response", {})
+        main, wind = raw.get("main", {}), raw.get("wind", {})
+        clouds, rain = raw.get("clouds", {}), raw.get("rain", {})
+        rows.append(
             (
                 item["station_id"],
-                execution_date,
+                item["observed_at"],
                 main.get("temp"),
                 main.get("humidity"),
                 rain.get("1h", 0.0),
@@ -181,42 +135,50 @@ def load_to_postgres(**context):
                 clouds.get("all"),
                 item["longitude"],
                 item["latitude"],
-                item.get("s3_path", ""),
-            ),
+                s3_path,
+            )
         )
 
-    conn.commit()
-    cur.close()
-    conn.close()
-    logger.info(f"Loaded {len(weather_data)} historical weather records to PostgreSQL")
+    from psycopg2.extras import execute_values
+
+    with pg_connection() as conn, conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO weather_observations
+                (station_id, observed_at, temperature_c, humidity_pct,
+                 rainfall_mm, wind_speed_ms, cloud_cover_pct, location, raw_s3_path)
+            VALUES %s
+            ON CONFLICT (station_id, observed_at) DO NOTHING
+            """,
+            rows,
+            template="(%s, %s, %s, %s, %s, %s, %s, "
+            "ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)",
+        )
+    logger.info("Loaded %d historical weather records into PostgreSQL", len(rows))
 
 
 with DAG(
     dag_id="weather_historical_backfill",
-    default_args=default_args,
+    default_args=BASE_DEFAULT_ARGS,
     description=(
-        "Historical weather ELT backfill. "
-        "Real-time weather is handled by the Redpanda weather producer + Flink."
+        "Historical weather ELT backfill. Real-time weather is handled "
+        "by the Redpanda weather producer + Flink."
     ),
-    schedule="0 0 * * *",  # Daily at midnight — for historical record only
+    schedule="0 0 * * *",  # daily at midnight — historical record only
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["backfill", "weather", "elt", "historical"],
 ) as dag:
 
     task_fetch = PythonOperator(
-        task_id="fetch_historical",
-        python_callable=fetch_historical_weather,
+        task_id="fetch_to_bronze",
+        python_callable=fetch_to_bronze,
+        outlets=[BRONZE_WEATHER],
     )
-
-    task_s3 = PythonOperator(
-        task_id="load_raw_s3",
-        python_callable=load_raw_to_s3,
-    )
-
-    task_pg = PythonOperator(
+    task_load = PythonOperator(
         task_id="load_postgres",
-        python_callable=load_to_postgres,
+        python_callable=load_postgres,
     )
 
-    task_fetch >> task_s3 >> task_pg
+    task_fetch >> task_load

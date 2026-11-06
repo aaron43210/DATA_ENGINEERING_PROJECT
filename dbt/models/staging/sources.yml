@@ -1,0 +1,53 @@
+version: 2
+
+sources:
+  - name: geoplatform
+    database: "{{ env_var('POSTGRES_DB', 'geoplatform') }}"
+    schema: public
+    description: "PostGIS raw/landing tables populated by Airflow and Flink"
+    tables:
+      - name: vector_features
+        description: "OpenStreetMap raw vector nodes and ways from Overpass API (ELT)"
+        columns:
+          - name: osm_id
+            tests:
+              - not_null
+              - unique
+          - name: feature_type
+            tests:
+              - not_null
+          - name: geometry
+            tests:
+              - not_null
+
+      - name: satellite_observations
+        description: "Sentinel-2 scene metadata and spatial bounding box polygons (ETL by Aaron)"
+        columns:
+          - name: scene_id
+            tests:
+              - not_null
+              - unique
+          - name: bbox
+            tests:
+              - not_null
+
+      - name: weather_observations
+        description: "Historical weather station observations"
+        columns:
+          - name: station_id
+            tests:
+              - not_null
+          - name: location
+            tests:
+              - not_null
+
+      - name: admin_boundaries
+        description: "Kerala district and state spatial boundaries"
+        columns:
+          - name: region_id
+            tests:
+              - not_null
+              - unique
+          - name: geometry
+            tests:
+              - not_null
