@@ -38,7 +38,12 @@ logger = logging.getLogger(__name__)
 SOURCE = "weather"
 # Same stations as the real-time producer so batch + stream align on station_id.
 CITIES = [
-    {"name": "Thiruvananthapuram", "lat": 8.5241, "lon": 76.9366, "station_id": "WX_TVM"},
+    {
+        "name": "Thiruvananthapuram",
+        "lat": 8.5241,
+        "lon": 76.9366,
+        "station_id": "WX_TVM",
+    },
     {"name": "Kochi", "lat": 9.9312, "lon": 76.2673, "station_id": "WX_COK"},
     {"name": "Kozhikode", "lat": 11.2588, "lon": 75.7804, "station_id": "WX_CCJ"},
     {"name": "Thrissur", "lat": 10.5276, "lon": 76.2144, "station_id": "WX_TCR"},
@@ -62,20 +67,26 @@ def fetch_to_bronze(**context):
         try:
             resp = requests.get(
                 "https://api.openweathermap.org/data/2.5/weather",
-                params={"lat": city["lat"], "lon": city["lon"],
-                        "appid": api_key, "units": "metric"},
+                params={
+                    "lat": city["lat"],
+                    "lon": city["lon"],
+                    "appid": api_key,
+                    "units": "metric",
+                },
                 timeout=10,
             )
             resp.raise_for_status()
-            items.append({
-                "station_id": city["station_id"],
-                "city_name": city["name"],
-                "latitude": city["lat"],
-                "longitude": city["lon"],
-                "raw_response": resp.json(),
-                "observed_at": observed_at,
-                "source": "airflow_backfill",
-            })
+            items.append(
+                {
+                    "station_id": city["station_id"],
+                    "city_name": city["name"],
+                    "latitude": city["lat"],
+                    "longitude": city["lon"],
+                    "raw_response": resp.json(),
+                    "observed_at": observed_at,
+                    "source": "airflow_backfill",
+                }
+            )
         except Exception as e:  # noqa: BLE001 - one city failing must not sink the run
             logger.error("Failed to fetch for %s: %s", city["name"], e)
 
@@ -85,7 +96,9 @@ def fetch_to_bronze(**context):
     key = bronze_key(SOURCE, context["data_interval_start"], "weather.jsonl")
     body = "\n".join(json.dumps(it) for it in items)
     get_s3_client().put_object(
-        Bucket=BRONZE_BUCKET, Key=key, Body=body.encode("utf-8"),
+        Bucket=BRONZE_BUCKET,
+        Key=key,
+        Body=body.encode("utf-8"),
         ContentType="application/x-ndjson",
     )
     logger.info("Wrote %d stations to s3://%s/%s", len(items), BRONZE_BUCKET, key)
@@ -111,11 +124,20 @@ def load_postgres(**context):
         raw = item.get("raw_response", {})
         main, wind = raw.get("main", {}), raw.get("wind", {})
         clouds, rain = raw.get("clouds", {}), raw.get("rain", {})
-        rows.append((
-            item["station_id"], item["observed_at"], main.get("temp"),
-            main.get("humidity"), rain.get("1h", 0.0), wind.get("speed"),
-            clouds.get("all"), item["longitude"], item["latitude"], s3_path,
-        ))
+        rows.append(
+            (
+                item["station_id"],
+                item["observed_at"],
+                main.get("temp"),
+                main.get("humidity"),
+                rain.get("1h", 0.0),
+                wind.get("speed"),
+                clouds.get("all"),
+                item["longitude"],
+                item["latitude"],
+                s3_path,
+            )
+        )
 
     from psycopg2.extras import execute_values
 
@@ -131,7 +153,7 @@ def load_postgres(**context):
             """,
             rows,
             template="(%s, %s, %s, %s, %s, %s, %s, "
-                     "ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)",
+            "ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)",
         )
     logger.info("Loaded %d historical weather records into PostgreSQL", len(rows))
 
@@ -139,8 +161,10 @@ def load_postgres(**context):
 with DAG(
     dag_id="weather_historical_backfill",
     default_args=BASE_DEFAULT_ARGS,
-    description=("Historical weather ELT backfill. Real-time weather is handled "
-                 "by the Redpanda weather producer + Flink."),
+    description=(
+        "Historical weather ELT backfill. Real-time weather is handled "
+        "by the Redpanda weather producer + Flink."
+    ),
     schedule="0 0 * * *",  # daily at midnight — historical record only
     start_date=datetime(2024, 1, 1),
     catchup=False,
