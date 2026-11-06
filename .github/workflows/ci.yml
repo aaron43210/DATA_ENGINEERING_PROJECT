@@ -21,7 +21,11 @@ jobs:
       # required ${VAR:?...} references during validation. These are CI-only and
       # never deployed.
       OPENWEATHER_API_KEY: ci-placeholder
-      POSTGRES_PASSWORD: geoplatform
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: geoplatform
+      POSTGRES_USER: geoplatform
+      POSTGRES_PASSWORD: GeoPlatform@2026
       AIRFLOW_DB_PASSWORD: airflow
       AIRFLOW_FERNET_KEY: ci-placeholder-fernet-key-not-used-at-build
       AIRFLOW_ADMIN_PASSWORD: ci-admin
@@ -41,7 +45,7 @@ jobs:
         image: postgis/postgis:16-3.4
         env:
           POSTGRES_USER: geoplatform
-          POSTGRES_PASSWORD: geoplatform
+          POSTGRES_PASSWORD: GeoPlatform@2026
           POSTGRES_DB: geoplatform
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 10s --health-retries 5
