@@ -1,0 +1,24 @@
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# Secrets and licenses
+secrets/
+*.license
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# dbt local configuration
+**/.user.yml
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+# Downloaded MinIO source repository
+minio-source/
