@@ -7,7 +7,7 @@ Validates spatial & tabular integrity across PostgreSQL/PostGIS warehouse tables
   - Critical column null checks
   - PostGIS geometry validity via ST_IsValid() & ST_IsEmpty()
   - Spatial reference system verification (ST_SRID() == 4326)
-  - Primary key uniqueness & non-empty row assertions
+  - Primary key uniqueness & non-empty row assertionsgit branch
   - Audit logging to `quality_runs` table
   - Enforces pass-rate gate (fails task if pass_rate < threshold)
 """
@@ -67,13 +67,21 @@ class SpatialDataQualityRunner:
             count = row["cnt"] if row else 0
 
         passed = count >= min_expected
-        self.results.append({
-            "check": "min_row_count",
-            "table": table_name,
-            "passed": passed,
-            "details": f"Actual count: {count}, Required min: {min_expected}",
-        })
-        logger.info("[%s] min_row_count on %s: %s (Count: %d)", self.dataset_name, table_name, passed, count)
+        self.results.append(
+            {
+                "check": "min_row_count",
+                "table": table_name,
+                "passed": passed,
+                "details": f"Actual count: {count}, Required min: {min_expected}",
+            }
+        )
+        logger.info(
+            "[%s] min_row_count on %s: %s (Count: %d)",
+            self.dataset_name,
+            table_name,
+            passed,
+            count,
+        )
         return passed
 
     def check_null_columns(self, table_name: str, columns: List[str]) -> bool:
@@ -85,16 +93,25 @@ class SpatialDataQualityRunner:
                 cur.execute(query)
                 row = cur.fetchone()
                 null_cnt = row["null_cnt"] if row else 0
-                passed = (null_cnt == 0)
+                passed = null_cnt == 0
                 if not passed:
                     overall_passed = False
-                self.results.append({
-                    "check": f"null_check_{col}",
-                    "table": table_name,
-                    "passed": passed,
-                    "details": f"Column {col} has {null_cnt} NULL values",
-                })
-                logger.info("[%s] Null check on %s.%s: passed=%s (nulls=%d)", self.dataset_name, table_name, col, passed, null_cnt)
+                self.results.append(
+                    {
+                        "check": f"null_check_{col}",
+                        "table": table_name,
+                        "passed": passed,
+                        "details": f"Column {col} has {null_cnt} NULL values",
+                    }
+                )
+                logger.info(
+                    "[%s] Null check on %s.%s: passed=%s (nulls=%d)",
+                    self.dataset_name,
+                    table_name,
+                    col,
+                    passed,
+                    null_cnt,
+                )
         return overall_passed
 
     def check_geometry_validity(
@@ -129,22 +146,30 @@ class SpatialDataQualityRunner:
         bad_srid = res["invalid_srid_count"]
 
         passed = (nulls == 0) and (invalid == 0) and (empty == 0) and (bad_srid == 0)
-        self.results.append({
-            "check": "geometry_validity",
-            "table": table_name,
-            "passed": passed,
-            "details": {
-                "total_rows": total,
-                "null_geom_count": nulls,
-                "invalid_geom_count": invalid,
-                "empty_geom_count": empty,
-                "invalid_srid_count": bad_srid,
-                "expected_srid": expected_srid,
-            },
-        })
+        self.results.append(
+            {
+                "check": "geometry_validity",
+                "table": table_name,
+                "passed": passed,
+                "details": {
+                    "total_rows": total,
+                    "null_geom_count": nulls,
+                    "invalid_geom_count": invalid,
+                    "empty_geom_count": empty,
+                    "invalid_srid_count": bad_srid,
+                    "expected_srid": expected_srid,
+                },
+            }
+        )
         logger.info(
             "[%s] Geometry validity check on %s.%s: passed=%s (invalid=%d, empty=%d, bad_srid=%d)",
-            self.dataset_name, table_name, geom_column, passed, invalid, empty, bad_srid
+            self.dataset_name,
+            table_name,
+            geom_column,
+            passed,
+            invalid,
+            empty,
+            bad_srid,
         )
         return passed
 
@@ -162,13 +187,15 @@ class SpatialDataQualityRunner:
             duplicates = cur.fetchall()
 
         dup_cnt = len(duplicates)
-        passed = (dup_cnt == 0)
-        self.results.append({
-            "check": "uniqueness_check",
-            "table": table_name,
-            "passed": passed,
-            "details": f"Found {dup_cnt} duplicate key combinations on ({cols})",
-        })
+        passed = dup_cnt == 0
+        self.results.append(
+            {
+                "check": "uniqueness_check",
+                "table": table_name,
+                "passed": passed,
+                "details": f"Found {dup_cnt} duplicate key combinations on ({cols})",
+            }
+        )
         return passed
 
     def log_and_enforce_gate(self) -> Dict[str, Any]:
@@ -214,7 +241,11 @@ class SpatialDataQualityRunner:
 
         logger.info(
             "Quality gate completed for %s [%s]: Pass rate: %.2f%% (%d/%d passed)",
-            self.dataset_name, self.suite_name, pass_rate, passed, total
+            self.dataset_name,
+            self.suite_name,
+            pass_rate,
+            passed,
+            total,
         )
 
         if pass_rate < self.min_pass_rate:
@@ -235,14 +266,22 @@ class SpatialDataQualityRunner:
 
 def run_osm_quality_checks(**context):
     """Airflow callable helper to execute data quality checks on vector_features."""
-    logical_date = context.get("logical_date") or context.get("execution_date") or datetime.utcnow()
+    logical_date = (
+        context.get("logical_date")
+        or context.get("execution_date")
+        or datetime.utcnow()
+    )
     runner = SpatialDataQualityRunner(
         dataset_name="osm_vector_features",
         suite_name="osm_spatial_integrity",
         logical_date=logical_date,
     )
     runner.check_min_row_count("public.vector_features", min_expected=1)
-    runner.check_null_columns("public.vector_features", columns=["osm_id", "feature_type", "geometry"])
+    runner.check_null_columns(
+        "public.vector_features", columns=["osm_id", "feature_type", "geometry"]
+    )
     runner.check_unique_keys("public.vector_features", key_columns=["osm_id"])
-    runner.check_geometry_validity("public.vector_features", geom_column="geometry", expected_srid=4326)
+    runner.check_geometry_validity(
+        "public.vector_features", geom_column="geometry", expected_srid=4326
+    )
     return runner.log_and_enforce_gate()
