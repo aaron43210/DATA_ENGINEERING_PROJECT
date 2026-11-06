@@ -48,7 +48,9 @@ def extract_to_bronze(**context):
     (a reference) over XCom — never the payload."""
     start = context["data_interval_start"]
     end = context["data_interval_end"]
-    time_range = f"{start.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    time_range = (
+        f"{start.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    )
 
     payload = {
         "collections": ["sentinel-2-c1-l2a"],
@@ -65,7 +67,9 @@ def extract_to_bronze(**context):
     key = bronze_key(SOURCE, start, "scenes.jsonl")
     body = "\n".join(json.dumps(f) for f in features)
     get_s3_client().put_object(
-        Bucket=BRONZE_BUCKET, Key=key, Body=body.encode("utf-8"),
+        Bucket=BRONZE_BUCKET,
+        Key=key,
+        Body=body.encode("utf-8"),
         ContentType="application/x-ndjson",
     )
     logger.info("Wrote raw scenes to s3://%s/%s", BRONZE_BUCKET, key)
@@ -101,10 +105,17 @@ def transform_and_load(**context):
             continue
         geom = scene.get("geometry")
         geom_json = json.dumps(geom) if geom and geom.get("type") == "Polygon" else None
-        rows.append((
-            scene.get("id"), "Sentinel-2", acq,
-            cloud, "EPSG:4326", s3_path, geom_json,
-        ))
+        rows.append(
+            (
+                scene.get("id"),
+                "Sentinel-2",
+                acq,
+                cloud,
+                "EPSG:4326",
+                s3_path,
+                geom_json,
+            )
+        )
 
     logger.info("Dropped %d cloudy scenes (> %d%%)", dropped, CLOUD_MAX)
     if not rows:
