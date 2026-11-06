@@ -59,7 +59,9 @@ def fetch_to_bronze(**context):
     key = bronze_key(SOURCE, context["data_interval_start"], "kerala_extract.jsonl")
     body = "\n".join(json.dumps(el) for el in elements)
     get_s3_client().put_object(
-        Bucket=BRONZE_BUCKET, Key=key, Body=body.encode("utf-8"),
+        Bucket=BRONZE_BUCKET,
+        Key=key,
+        Body=body.encode("utf-8"),
         ContentType="application/x-ndjson",
     )
     logger.info("Wrote raw OSM data to s3://%s/%s", BRONZE_BUCKET, key)
@@ -85,13 +87,23 @@ def load_postgis(**context):
         el = json.loads(line)
         tags = el.get("tags", {})
         # Only hospital nodes carry a usable point geometry here.
-        if el.get("type") == "node" and tags.get("amenity") == "hospital" \
-                and "lon" in el and "lat" in el:
+        if (
+            el.get("type") == "node"
+            and tags.get("amenity") == "hospital"
+            and "lon" in el
+            and "lat" in el
+        ):
             feature_type = tags.get("amenity") or tags.get("highway") or "unknown"
-            rows.append((
-                el.get("id"), feature_type, tags.get("name", "Unnamed"),
-                json.dumps(tags), el["lon"], el["lat"],
-            ))
+            rows.append(
+                (
+                    el.get("id"),
+                    feature_type,
+                    tags.get("name", "Unnamed"),
+                    json.dumps(tags),
+                    el["lon"],
+                    el["lat"],
+                )
+            )
 
     if not rows:
         logger.info("No loadable features found.")

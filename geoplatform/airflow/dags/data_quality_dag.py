@@ -33,8 +33,9 @@ default_args = {
 }
 
 
-def execute_gx_checkpoint(checkpoint_name: str, dataset_name: str, suite_name: str,
-                          logical_date):
+def execute_gx_checkpoint(
+    checkpoint_name: str, dataset_name: str, suite_name: str, logical_date
+):
     """Run a GX checkpoint, record metrics to quality_runs, then enforce the
     pass-rate threshold by raising on failure."""
     try:
@@ -79,8 +80,15 @@ def execute_gx_checkpoint(checkpoint_name: str, dataset_name: str, suite_name: s
                 failed_expectations = EXCLUDED.failed_expectations,
                 run_time = NOW()
             """,
-            (dataset_name, suite_name, logical_date, pass_rate, total,
-             passed, total - passed),
+            (
+                dataset_name,
+                suite_name,
+                logical_date,
+                pass_rate,
+                total,
+                passed,
+                total - passed,
+            ),
         )
 
     threshold = float(os.environ.get("QUALITY_MIN_PASS_RATE", "95"))
@@ -94,13 +102,21 @@ def execute_gx_checkpoint(checkpoint_name: str, dataset_name: str, suite_name: s
 
 
 def run_satellite_quality_check(**context):
-    execute_gx_checkpoint("satellite_checkpoint", "satellite_observation",
-                          "satellite_suite", context["data_interval_start"])
+    execute_gx_checkpoint(
+        "satellite_checkpoint",
+        "satellite_observation",
+        "satellite_suite",
+        context["data_interval_start"],
+    )
 
 
 def run_weather_quality_check(**context):
-    execute_gx_checkpoint("weather_checkpoint", "environmental_conditions",
-                          "weather_suite", context["data_interval_start"])
+    execute_gx_checkpoint(
+        "weather_checkpoint",
+        "environmental_conditions",
+        "weather_suite",
+        context["data_interval_start"],
+    )
 
 
 with DAG(

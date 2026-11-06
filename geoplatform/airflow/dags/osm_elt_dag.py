@@ -34,7 +34,9 @@ from data_quality_checks import run_osm_quality_checks
 logger = logging.getLogger("airflow.osm_elt")
 
 # ── Dynamic Environment Configuration ─────────────────────────────────────────
-OVERPASS_API_URL = os.getenv("OVERPASS_API_URL", "https://overpass-api.de/api/interpreter")
+OVERPASS_API_URL = os.getenv(
+    "OVERPASS_API_URL", "https://overpass-api.de/api/interpreter"
+)
 OVERPASS_TIMEOUT = int(os.getenv("OVERPASS_TIMEOUT_SECONDS", "60"))
 OVERPASS_BBOX = os.getenv("OVERPASS_BBOX", "8.1,74.8,12.8,77.5")  # Kerala bounding box
 
@@ -83,7 +85,11 @@ def extract_osm_to_bronze(**context: Dict[str, Any]) -> str:
     hour = str(context["execution_date"].hour).zfill(2)
     s3_key = f"source=osm/ingest_date={ds}/hour={hour}/data.jsonl"
 
-    logger.info("Connecting to Overpass API at %s for BBOX [%s]", OVERPASS_API_URL, OVERPASS_BBOX)
+    logger.info(
+        "Connecting to Overpass API at %s for BBOX [%s]",
+        OVERPASS_API_URL,
+        OVERPASS_BBOX,
+    )
     response = requests.post(
         OVERPASS_API_URL,
         data={"data": OVERPASS_QUERY},
@@ -94,7 +100,9 @@ def extract_osm_to_bronze(**context: Dict[str, Any]) -> str:
 
     payload = response.json()
     elements = payload.get("elements", [])
-    logger.info("Successfully received %d raw OSM elements from Overpass API", len(elements))
+    logger.info(
+        "Successfully received %d raw OSM elements from Overpass API", len(elements)
+    )
 
     # Serialize elements as newline-delimited JSON (JSONL)
     buffer = io.BytesIO()
@@ -116,7 +124,9 @@ def extract_osm_to_bronze(**context: Dict[str, Any]) -> str:
         },
     )
 
-    logger.info("Landed raw OSM JSONL into MinIO Bronze at s3://%s/%s", BUCKET_BRONZE, s3_key)
+    logger.info(
+        "Landed raw OSM JSONL into MinIO Bronze at s3://%s/%s", BUCKET_BRONZE, s3_key
+    )
     return s3_key
 
 
@@ -153,7 +163,9 @@ def load_bronze_to_postgis(**context: Dict[str, Any]) -> int:
             lat = float(item["lat"])
             # Validate coordinates within reasonable bounds
             if -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0:
-                feature_type = tags.get("amenity") or tags.get("healthcare") or "osm_node"
+                feature_type = (
+                    tags.get("amenity") or tags.get("healthcare") or "osm_node"
+                )
                 name = tags.get("name") or tags.get("name:en") or f"OSM Node {osm_id}"
                 rows.append((osm_id, feature_type, name, json.dumps(tags), lon, lat))
 
@@ -191,7 +203,10 @@ def load_bronze_to_postgis(**context: Dict[str, Any]) -> int:
                 page_size=1000,
             )
             conn.commit()
-            logger.info("Successfully loaded and indexed %d vector features into PostGIS", len(rows))
+            logger.info(
+                "Successfully loaded and indexed %d vector features into PostGIS",
+                len(rows),
+            )
     finally:
         conn.close()
 
