@@ -65,7 +65,9 @@ jobs:
 
       - name: Run API unit tests
         working-directory: geoplatform/api
-        run: pytest -q
+        env:
+          PYTHONPATH: .
+        run: pytest -q tests/
 
       - name: dbt parse and compile
         working-directory: geoplatform/dbt/geoplatform
