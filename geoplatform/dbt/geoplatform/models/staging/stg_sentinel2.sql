@@ -11,7 +11,6 @@ renamed as (
         cloud_percentage,
         crs as coordinate_reference_system,
         s3_bronze_path,
-        lakefs_commit_id,
         bbox as geometry_polygon,
         ingested_at as row_ingested_at
     from source

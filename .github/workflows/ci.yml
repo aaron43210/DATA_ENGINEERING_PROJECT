@@ -21,7 +21,11 @@ jobs:
       # required ${VAR:?...} references during validation. These are CI-only and
       # never deployed.
       OPENWEATHER_API_KEY: ci-placeholder
-      POSTGRES_PASSWORD: geoplatform
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: geoplatform
+      POSTGRES_USER: geoplatform
+      POSTGRES_PASSWORD: GeoPlatform@2026
       AIRFLOW_DB_PASSWORD: airflow
       AIRFLOW_FERNET_KEY: ci-placeholder-fernet-key-not-used-at-build
       AIRFLOW_ADMIN_PASSWORD: ci-admin
@@ -41,7 +45,7 @@ jobs:
         image: postgis/postgis:16-3.4
         env:
           POSTGRES_USER: geoplatform
-          POSTGRES_PASSWORD: geoplatform
+          POSTGRES_PASSWORD: GeoPlatform@2026
           POSTGRES_DB: geoplatform
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 10s --health-retries 5
@@ -65,7 +69,9 @@ jobs:
 
       - name: Run API unit tests
         working-directory: geoplatform/api
-        run: pytest -q
+        env:
+          PYTHONPATH: .
+        run: pytest -q tests/
 
       - name: dbt parse and compile
         working-directory: geoplatform/dbt/geoplatform
@@ -79,17 +85,23 @@ jobs:
       - name: Build API Docker image
         run: docker build -t geoplatform-api:test ./api
 
+      - 
       - name: OpenLineage schema validation
         run: |
           python -c "
           from openlineage.client.run import RunEvent, RunState, Run, Job
           import uuid, datetime
+
           event = RunEvent(
               eventType=RunState.START,
               eventTime=datetime.datetime.now().isoformat(),
               run=Run(runId=str(uuid.uuid4())),
               job=Job(namespace='ci', name='test'),
-              inputs=[], outputs=[]
+              inputs=[],
+              outputs=[],
+              producer='https://github.com/OpenLineage/OpenLineage'
           )
+
           print('OpenLineage schema valid:', str(event)[:80])
           "
+
