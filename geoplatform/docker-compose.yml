@@ -21,11 +21,15 @@ x-airflow-common: &airflow-common
     POSTGRES_DB: geoplatform
     POSTGRES_USER: geoplatform
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    GX_CONTEXT_ROOT: /opt/airflow/data_quality/gx
+    GX_PG_CONNECTION_STRING: postgresql+psycopg2://geoplatform:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/geoplatform
     REDPANDA_BROKERS: redpanda:9092
     MONGO_URI: mongodb://${MONGO_ROOT_USER:?set in .env}:${MONGO_ROOT_PASSWORD:?set in .env}@mongodb:27017
     OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:?set in .env}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
+    - ./dbt/geoplatform:/opt/airflow/dbt
+    - ./data_quality:/opt/airflow/data_quality
     - airflow_logs:/opt/airflow/logs
     - ./openlineage/config:/opt/airflow/openlineage
   depends_on:
