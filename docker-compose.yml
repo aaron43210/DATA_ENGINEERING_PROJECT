@@ -1,0 +1,277 @@
+version: '3.8'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloud-Native Geospatial Data Platform — Angel's Infrastructure Stack
+#
+# Services Orchestrated:
+#   1. postgres: PostgreSQL 16 + PostGIS 3.4
+#   2. minio: MinIO Object Storage (Bronze / Silver / Gold / Warehouse)
+#   3. minio-setup: Automates bucket provisioning (mc)
+#   4. iceberg-rest: Apache Iceberg REST Catalog (lakehouse metadata layer)
+#   5. redpanda: Streaming message broker (Kafka API compatible)
+#   6. airflow-init: Airflow DB migration & admin user setup
+#   7. airflow-webserver: Airflow UI & API (port 8080)
+#   8. airflow-scheduler: DAG execution engine
+#   9. flink-jobmanager: Apache Flink cluster coordinator (port 8081)
+#  10. flink-taskmanager: Apache Flink stream processing worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.8.1-python3.10}
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:?set in .env}@postgres:5432/${AIRFLOW_DB_NAME:-airflow}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set in .env}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-geoplatform_airflow_webserver_secret_2026}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: "false"
+    # S3 / MinIO Configuration
+    MINIO_ENDPOINT: http://minio:9000
+    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set in .env}
+    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
+    BUCKET_BRONZE: ${BUCKET_BRONZE:-bronze}
+    BUCKET_SILVER: ${BUCKET_SILVER:-silver}
+    BUCKET_GOLD: ${BUCKET_GOLD:-gold}
+    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
+    AWS_ENDPOINT_URL: http://minio:9000
+    # PostGIS Target DB
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+    POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    # Ingestion & Quality Parameters
+    OVERPASS_API_URL: ${OVERPASS_API_URL:-https://overpass-api.de/api/interpreter}
+    QUALITY_MIN_PASS_RATE: ${QUALITY_MIN_PASS_RATE:-95.0}
+    # Iceberg Catalog
+    ICEBERG_REST_URI: http://iceberg-rest:8181
+    ICEBERG_WAREHOUSE: s3://warehouse/
+    # Redpanda Broker
+    REDPANDA_BROKERS: redpanda:9092
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./dbt:/opt/airflow/dbt
+    - airflow_logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
+services:
+
+  # ── 1. PostgreSQL + PostGIS ────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: geoplatform-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-airflow}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:-airflow}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_postgis.sql:/docker-entrypoint-initdb.d/01_init_postgis.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-geoplatform} -d ${POSTGRES_DB:-geoplatform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geoplatform-net
+
+  # ── 2. MinIO (Object Storage) ──────────────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-31T20-20-33Z
+    container_name: geoplatform-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geoplatform-net
+
+  # ── 3. MinIO Setup (Automated Bucket Provisioning) ─────────────────────────
+  minio-setup:
+    image: minio/mc:RELEASE.2024-01-28T22-13-53Z
+    container_name: geoplatform-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Configuring MinIO client alias...';
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:?set in .env} ${MINIO_ROOT_PASSWORD:?set in .env};
+      echo 'Provisioning Bronze, Silver, Gold, and Warehouse buckets...';
+      mc mb local/${BUCKET_BRONZE:-bronze} --ignore-existing;
+      mc mb local/${BUCKET_SILVER:-silver} --ignore-existing;
+      mc mb local/${BUCKET_GOLD:-gold} --ignore-existing;
+      mc mb local/${BUCKET_WAREHOUSE:-warehouse} --ignore-existing;
+      mc anonymous set download local/${BUCKET_BRONZE:-bronze};
+      echo 'MinIO buckets initialized successfully.';
+      exit 0;
+      "
+    networks:
+      - geoplatform-net
+
+  # ── 4. Apache Iceberg REST Catalog ─────────────────────────────────────────
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: geoplatform-iceberg-rest
+    restart: unless-stopped
+    ports:
+      - "${ICEBERG_REST_PORT:-8181}:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
+      AWS_REGION: ${MINIO_REGION:-us-east-1}
+    depends_on:
+      minio-setup:
+        condition: service_completed_successfully
+    networks:
+      - geoplatform-net
+
+  # ── 5. Redpanda (Kafka-compatible Streaming Engine) ────────────────────────
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.4
+    container_name: geoplatform-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 1G
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr localhost:8082
+      - --schema-registry-addr 0.0.0.0:8081
+    ports:
+      - "19092:19092"
+      - "8081:8081"
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geoplatform-net
+
+  # ── 6. Airflow Init (DB Migration & Setup) ─────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: geoplatform-airflow-init
+    entrypoint: >
+      /bin/bash -c "
+      pip install boto3 psycopg2-binary requests dbt-postgres --quiet;
+      airflow db migrate;
+      airflow users create \
+        --username ${AIRFLOW_ADMIN_USER:-admin} \
+        --firstname Angel \
+        --lastname Engineer \
+        --role Admin \
+        --email ${AIRFLOW_ADMIN_EMAIL:-angel@geoplatform.local} \
+        --password ${AIRFLOW_ADMIN_PASSWORD:-admin_password_2026} || true;
+      exit 0;
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── 7. Airflow Webserver ───────────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: geoplatform-airflow-webserver
+    restart: unless-stopped
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ── 8. Airflow Scheduler ───────────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: geoplatform-airflow-scheduler
+    restart: unless-stopped
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ── 9. Apache Flink JobManager ─────────────────────────────────────────────
+  flink-jobmanager:
+    image: flink:1.18.1-scala_2.12-java11
+    container_name: geoplatform-flink-jobmanager
+    restart: unless-stopped
+    command: jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: ${FLINK_PARALLELISM:-2}
+        taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-4}
+    networks:
+      - geoplatform-net
+
+  # ── 10. Apache Flink TaskManager ───────────────────────────────────────────
+  flink-taskmanager:
+    image: flink:1.18.1-scala_2.12-java11
+    container_name: geoplatform-flink-taskmanager
+    restart: unless-stopped
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-4}
+        parallelism.default: ${FLINK_PARALLELISM:-2}
+    depends_on:
+      - flink-jobmanager
+    networks:
+      - geoplatform-net
+
+networks:
+  geoplatform-net:
+    driver: bridge
+    name: geoplatform-net
+
+volumes:
+  postgres_data:
+    name: geoplatform_postgres_data
+  minio_data:
+    name: geoplatform_minio_data
+  airflow_logs:
+    name: geoplatform_airflow_logs
