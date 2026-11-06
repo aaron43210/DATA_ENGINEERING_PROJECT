@@ -24,7 +24,6 @@ select
     end as image_quality,
     
     s3_bronze_path,
-    lakefs_commit_id,
     geometry_polygon
 from staged_satellite
 
