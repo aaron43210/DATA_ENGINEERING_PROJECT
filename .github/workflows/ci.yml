@@ -85,17 +85,23 @@ jobs:
       - name: Build API Docker image
         run: docker build -t geoplatform-api:test ./api
 
+      - 
       - name: OpenLineage schema validation
         run: |
           python -c "
           from openlineage.client.run import RunEvent, RunState, Run, Job
           import uuid, datetime
+
           event = RunEvent(
               eventType=RunState.START,
               eventTime=datetime.datetime.now().isoformat(),
               run=Run(runId=str(uuid.uuid4())),
               job=Job(namespace='ci', name='test'),
-              inputs=[], outputs=[]
+              inputs=[],
+              outputs=[],
+              producer='https://github.com/OpenLineage/OpenLineage'
           )
+
           print('OpenLineage schema valid:', str(event)[:80])
           "
+
