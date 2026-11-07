@@ -10,8 +10,7 @@ Flow:
   extract_to_bronze   : query STAC API -> archive ALL scenes as JSONL to Bronze
   transform_and_load  : read Bronze -> filter/validate (TRANSFORM) -> load PostGIS
 
-Storage: MinIO only (object storage + Bronze landing zone). No LakeFS, no Mongo.
-Integrations: OpenLineage (automatic via the Airflow backend).
+Storage: Bronze in object storage (MinIO locally), curated rows in PostGIS.
 """
 
 from __future__ import annotations

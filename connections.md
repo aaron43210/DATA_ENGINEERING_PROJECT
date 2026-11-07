@@ -17,18 +17,22 @@ bridge network and reach each other by **service name**. Credentials come from `
 | Redpanda Console | `redpanda-console:8080` | `8088` | Topics, consumer lag, schemas |
 | Airflow | `airflow-webserver:8080` | `8080` | DAG UI |
 | Flink JobManager | `flink-jobmanager:8081` | `8083` | Flink UI / REST |
+| FastAPI | `api:8000` | `8000` | Gold data products (REST, `/docs`) |
 
 ## 1. PostgreSQL (PostGIS)
 - Host `postgres`, port `5432`, DB `${POSTGRES_DB}` (default `geoplatform`), user `${POSTGRES_USER}`.
 - Schema: `scripts/init_postgis.sql` (runs on a fresh volume; safe to re-run for upgrades).
 - Streaming tables written by Flink: `public.sensor_observations`, `public.weather_stream_observations`.
+- Gold marts built by dbt: `marts.satellite_observation`, `marts.environmental_conditions`, `marts.fct_spatial_climate_mart`.
+- TLS: every client honours `POSTGRES_SSLMODE` (default `prefer`, `require` on RDS).
 
 ## 2. MinIO
-- Endpoint `http://minio:9000`, keys `${MINIO_ROOT_USER}` / `${MINIO_ROOT_PASSWORD}`.
+- Endpoint `http://minio:9000`. Airflow and the Iceberg loaders reach it through `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, which compose maps from `${MINIO_ROOT_USER}` / `${MINIO_ROOT_PASSWORD}`.
 - Buckets: `bronze`, `silver`, `gold`, `warehouse`.
 
 - Built from source by `infra/minio/Dockerfile`; `minio-setup` applies `infra/minio/setup.sh` (private buckets, Bronze versioning and lifecycle).
 - Iceberg REST catalog keeps its metadata in the `iceberg_catalog` volume; tables live in `s3://warehouse/`.
+- Silver tables (namespace `silver`): `osm_features`, `sentinel2_scenes`, `weather_observations` (from Bronze); `sensor_records`, `weather_stream_records` (from the Flink tables, every 5 min).
 
 ## 3. Redpanda
 - Broker `redpanda:9092`, Schema Registry `http://redpanda:8081`.
@@ -49,9 +53,13 @@ Avro subjects use the default topic-name strategy: `sensor.live-value`, `weather
 - Job `geoplatform-stream` (`flink/jobs/geoplatform_stream_job.py`) is submitted and supervised by
   `flink-job-submit`, which restores from the newest retained checkpoint.
 - Consumer groups: `${KAFKA_GROUP_PREFIX}-sensor`, `${KAFKA_GROUP_PREFIX}-weather` (default prefix `geoplatform-flink`).
-- PostgreSQL via JDBC (`jdbc:postgresql://postgres:5432/${POSTGRES_DB}`), Kafka via the bundled
+- PostgreSQL via JDBC (`jdbc:postgresql://postgres:5432/${POSTGRES_DB}?sslmode=${POSTGRES_SSLMODE}`), Kafka via the bundled
   `flink-connector-kafka` 3.2.0-1.18.
 
 ## 5. Producers (opt-in profiles)
 - `weather-producer` (`--profile weather`): needs `OPENWEATHER_API_KEY`; polls 5 Kerala stations every `POLL_INTERVAL_SECONDS`.
 - `sensor-producer` (`--profile sensor`): needs `MQTT_BROKER` and broker credentials/TLS files under `MQTT_CERTS_DIR`.
+
+## 6. FastAPI
+- `api:8000`, reads PostGIS only. Auth: `X-API-Key: ${API_KEY}` or a JWT signed with `${JWT_SECRET}`.
+- Endpoints: `/datasets/` (catalog), `/imagery/`, `/weather/`, `/sensors/`, `/vector/features`, `/health`.

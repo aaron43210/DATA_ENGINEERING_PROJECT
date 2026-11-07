@@ -1,8 +1,0 @@
-transport:
-  type: http
-  url: http://datahub-gms:8080
-  endpoint: /api/v1/lineage
-
-facets:
-  custom_environment:
-    environment: development
