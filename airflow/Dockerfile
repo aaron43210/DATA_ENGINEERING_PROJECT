@@ -1,4 +1,4 @@
-# Python 3.11: dbt 1.11 and PyIceberg need >= 3.10; great-expectations 0.18 needs <= 3.11.
+# Python 3.11: dbt 1.11 and PyIceberg need >= 3.10.
 FROM apache/airflow:2.9.1-python3.11
 
 COPY requirements.txt /requirements.txt

@@ -73,18 +73,15 @@ x-airflow-common: &airflow-common
     # Iceberg Catalog
     ICEBERG_REST_URI: http://iceberg-rest:8181
     ICEBERG_WAREHOUSE: s3://${BUCKET_WAREHOUSE:-warehouse}/
-    # dbt and Great Expectations
+    # dbt
     DBT_TARGET_PATH: /tmp/dbt-target
     DBT_LOG_PATH: /tmp/dbt-logs
-    GX_CONTEXT_ROOT: /opt/airflow/data_quality/gx
-    GX_PG_CONNECTION_STRING: postgresql+psycopg2://${POSTGRES_USER:-geoplatform}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-geoplatform}
     # Redpanda Broker
     REDPANDA_BROKERS: redpanda:9092
   volumes:
     - ./dags:/opt/airflow/dags
     - ./dbt:/opt/airflow/dbt
     - ./iceberg:/opt/airflow/iceberg:ro
-    - ./data_quality:/opt/airflow/data_quality
     - airflow_logs:/opt/airflow/logs
   user: "${AIRFLOW_UID:-50000}:0"
   networks:

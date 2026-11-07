@@ -1,8 +1,8 @@
 """
 Airflow DAG: dbt_transform
 ==========================
-Runs `dbt build` (models and tests) whenever fresh data is ready. A successful
-build publishes GOLD_READY, which triggers data_quality_dag.
+Runs `dbt build` (models and tests) whenever fresh data is ready. The data
+quality gate is the dbt tests on the Gold marts: a failing test fails this task.
 
 dbt lives in its own virtualenv in the Airflow image. Target and log paths are
 redirected in docker-compose so nothing is written into the mounted project.
@@ -20,7 +20,6 @@ from common.config import (
     BASE_DEFAULT_ARGS,
     BRONZE_SENTINEL2,
     BRONZE_WEATHER,
-    GOLD_READY,
     POSTGIS_BOUNDARIES,
     POSTGIS_OSM,
 )
@@ -44,5 +43,4 @@ with DAG(
             f"{DBT_BIN} build "
             f"--project-dir {DBT_PROJECT_DIR} --profiles-dir {DBT_PROJECT_DIR}"
         ),
-        outlets=[GOLD_READY],
     )
