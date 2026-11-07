@@ -9,4 +9,4 @@ RUN pip install --no-cache-dir -r /requirements.txt
 RUN python -m venv /opt/airflow/dbt-venv \
  && /opt/airflow/dbt-venv/bin/pip install --no-cache-dir dbt-core==1.11.17 dbt-postgres==1.11.0
 RUN python -m venv /opt/airflow/iceberg-venv \
- && /opt/airflow/iceberg-venv/bin/pip install --no-cache-dir "pyiceberg[pyarrow]==0.10.0" boto3==1.34.69
+ && /opt/airflow/iceberg-venv/bin/pip install --no-cache-dir "pyiceberg[pyarrow]==0.10.0" boto3==1.34.69 psycopg2-binary==2.9.9

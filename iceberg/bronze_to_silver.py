@@ -258,33 +258,39 @@ def load_table(catalog, s3, bucket: str, table: SilverTable) -> int:
     return written
 
 
-def main() -> int:
-    endpoint = env("MINIO_ENDPOINT")
-    access_key = env("MINIO_ACCESS_KEY")
-    secret_key = env("MINIO_SECRET_KEY")
-    region = os.environ.get("MINIO_REGION", "us-east-1")
-    bucket = os.environ.get("BUCKET_BRONZE", "bronze")
-
-    s3 = boto3.client(
+def s3_client():
+    """boto3 S3 client for the object store holding Bronze."""
+    return boto3.client(
         "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name=region,
+        endpoint_url=env("MINIO_ENDPOINT"),
+        aws_access_key_id=env("MINIO_ACCESS_KEY"),
+        aws_secret_access_key=env("MINIO_SECRET_KEY"),
+        region_name=os.environ.get("MINIO_REGION", "us-east-1"),
     )
+
+
+def silver_catalog():
+    """Iceberg REST catalog for the Silver tables, with the Silver namespace present."""
     catalog = load_catalog(
         "geoplatform",
         **{
             "type": "rest",
             "uri": env("ICEBERG_REST_URI"),
-            "s3.endpoint": endpoint,
-            "s3.access-key-id": access_key,
-            "s3.secret-access-key": secret_key,
-            "s3.region": region,
+            "s3.endpoint": env("MINIO_ENDPOINT"),
+            "s3.access-key-id": env("MINIO_ACCESS_KEY"),
+            "s3.secret-access-key": env("MINIO_SECRET_KEY"),
+            "s3.region": os.environ.get("MINIO_REGION", "us-east-1"),
             "s3.path-style-access": "true",
         },
     )
     catalog.create_namespace_if_not_exists(NAMESPACE)
+    return catalog
+
+
+def main() -> int:
+    s3 = s3_client()
+    catalog = silver_catalog()
+    bucket = os.environ.get("BUCKET_BRONZE", "bronze")
 
     total = sum(load_table(catalog, s3, bucket, table) for table in TABLES)
     logger.info("Silver load finished: %d rows written", total)
