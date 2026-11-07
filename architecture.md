@@ -89,7 +89,6 @@ graph TD
 
     MinIO --> Iceberg
     Postgres --> dbt
-    Iceberg --> dbt
 
     dbt --> API
     API --> OpenMetadata
@@ -141,6 +140,43 @@ Sources (Sentinel-2 / Weather / OSM / IoT)
  OpenMetadata ◄─(OpenLineage)─ Airflow/Flink/dbt
  Prometheus + Grafana                        ← Observability
 ```
+
+---
+
+## Batch Path (as built)
+
+- Airflow lands raw Overpass responses in MinIO Bronze as JSONL (`source=<x>/ingest_date=<d>/hour=<h>/`), then loads PostGIS and runs a spatial quality gate.
+- `bronze_to_silver` copies new Bronze objects into Iceberg tables `silver.osm_features`, `silver.sentinel2_scenes` and `silver.weather_observations` with PyIceberg. No Spark is involved. Each load is an Iceberg snapshot, which gives versioning and time travel.
+- dbt reads PostGIS only, because dbt-postgres cannot read Iceberg. Iceberg Silver is the versioned analytical copy, and PostGIS is the serving store.
+- `admin_boundaries` holds real OSM polygons for all 14 Kerala districts.
+- MinIO is compiled from the official archived source, since free images are no longer published. Bronze is private and versioned, with a lifecycle rule for GDPR retention.
+
+## Streaming Path (as built)
+
+Lubaba's Redpanda producers and PyFlink job, wired into the root stack. Hosts, ports and
+topic contracts are in `connections.md`.
+
+```text
+MQTT sensors ──► sensor-producer ──► sensor.live  (Confluent Avro) ─┐
+OpenWeatherMap ─► weather-producer ─► weather.live (Confluent Avro) ─┤
+                                                                     ▼
+                          Flink job `geoplatform-stream` (flink/jobs/geoplatform_stream_job.py)
+   sensor:  decode + validate → event-time watermark (10s) → per sensor/measurement z-score (30 readings)
+            → nearest-station ambient join (broadcast state of latest weather) → sensor_observations
+   weather: decode + validate → per-station dedupe of repeat polls → temperature z-score
+            → weather_stream_observations, and → broadcast to the sensor join
+   side outputs: invalid/late sensor → sensor.dead-letter · malformed weather → weather.dead-letter
+                 anomalies + producer API errors → platform.quality.alerts
+```
+
+Delivery guarantees:
+
+- Kafka offsets and keyed state are checkpointed every 10 s (exactly-once mode) to `geoplatform_flink_checkpoints`; `flink-job-submit` restores the newest checkpoint after any restart.
+- PostgreSQL writes are idempotent: `sensor_observations` is unique on `(source_topic, source_partition, source_offset)`, `weather_stream_observations` on `(station_id, event_time)`. Replays never duplicate rows. Kafka and PostgreSQL are **not** one atomic transaction.
+- Dead-letter and alert topics are at-least-once; dedupe on source coordinates / `alert_id`.
+- A Schema Registry outage fails the task and replays from checkpoint instead of quarantining valid records.
+
+Not yet built on this path: OpenLineage emission from Flink (no OpenMetadata service in the compose file yet) and Prometheus scraping of Flink/Redpanda metrics.
 
 ---
 

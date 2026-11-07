@@ -10,44 +10,50 @@ sources:
         description: "OpenStreetMap raw vector nodes and ways from Overpass API (ELT)"
         columns:
           - name: osm_id
-            tests:
+            data_tests:
               - not_null
-              - unique
           - name: feature_type
-            tests:
+            data_tests:
               - not_null
           - name: geometry
-            tests:
+            data_tests:
               - not_null
 
       - name: satellite_observations
         description: "Sentinel-2 scene metadata and spatial bounding box polygons (ETL by Aaron)"
         columns:
           - name: scene_id
-            tests:
+            data_tests:
               - not_null
               - unique
           - name: bbox
-            tests:
+            data_tests:
               - not_null
 
       - name: weather_observations
         description: "Historical weather station observations"
         columns:
           - name: station_id
-            tests:
+            data_tests:
               - not_null
           - name: location
-            tests:
+            data_tests:
+              - not_null
+
+      - name: weather_stream_observations
+        description: "Live weather written by the Flink job"
+        columns:
+          - name: station_id
+            data_tests:
               - not_null
 
       - name: admin_boundaries
         description: "Kerala district and state spatial boundaries"
         columns:
           - name: region_id
-            tests:
+            data_tests:
               - not_null
               - unique
           - name: geometry
-            tests:
+            data_tests:
               - not_null

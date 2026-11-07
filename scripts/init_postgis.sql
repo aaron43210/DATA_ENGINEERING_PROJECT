@@ -4,20 +4,7 @@
 -- Managed by: Angel (Storage & Infrastructure Lead)
 -- =============================================================================
 
--- 1. Create Airflow Database & User if not already present
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'airflow') THEN
-        CREATE ROLE airflow WITH LOGIN PASSWORD 'airflow_meta_pass_2026';
-    END IF;
-END
-$$;
-
-SELECT 'CREATE DATABASE airflow OWNER airflow'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'airflow')\gexec
-
--- Switch to geoplatform application database
-\connect geoplatform;
+-- The Airflow role and database are created by scripts/init_airflow_db.sh.
 
 -- 2. Enable PostGIS Core & Topology Extensions
 CREATE EXTENSION IF NOT EXISTS postgis;
@@ -36,8 +23,7 @@ CREATE SCHEMA IF NOT EXISTS staging;
 CREATE SCHEMA IF NOT EXISTS marts;
 CREATE SCHEMA IF NOT EXISTS quality;
 
--- Grant permissions to geoplatform role
-GRANT ALL ON SCHEMA public, raw, staging, marts, quality TO geoplatform;
+GRANT ALL ON SCHEMA public, raw, staging, marts, quality TO CURRENT_USER;
 
 -- =============================================================================
 -- 4. TABLE DEFINITIONS
@@ -46,7 +32,8 @@ GRANT ALL ON SCHEMA public, raw, staging, marts, quality TO geoplatform;
 -- 4.1 OSM Vector Features (ELT ingestion target for Overpass API)
 CREATE TABLE IF NOT EXISTS public.vector_features (
     id SERIAL PRIMARY KEY,
-    osm_id BIGINT UNIQUE NOT NULL,
+    osm_type VARCHAR(10) NOT NULL DEFAULT 'node', -- OSM ids are unique per type only
+    osm_id BIGINT NOT NULL,
     feature_type VARCHAR(50) NOT NULL,            -- e.g., 'hospital', 'highway_trunk'
     name TEXT,
     tags JSONB NOT NULL DEFAULT '{}'::jsonb,      -- Full raw OSM key-value attributes
@@ -89,16 +76,24 @@ CREATE TABLE IF NOT EXISTS public.admin_boundaries (
     id SERIAL PRIMARY KEY,
     region_id VARCHAR(100) UNIQUE NOT NULL,
     name VARCHAR(200) NOT NULL,
-    admin_level INT NOT NULL DEFAULT 4,           -- 2=Country, 4=State, 6=District
+    admin_level INT NOT NULL DEFAULT 5,           -- OSM India: 4=State, 5=District
     country_code VARCHAR(10) DEFAULT 'IND',
     domain_owner VARCHAR(100) DEFAULT 'GIS Domain',
+    data_product_id VARCHAR(100),
+    osm_relation_id BIGINT,
+    wikidata_id VARCHAR(20),
     geometry GEOMETRY(MultiPolygon, 4326) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 4.5 Real-Time IoT Sensor Observations (Streaming Flink target)
+-- Written by flink/jobs/geoplatform_stream_job.py. source_* identify the Redpanda
+-- record so checkpoint replays are idempotent (ON CONFLICT DO NOTHING).
 CREATE TABLE IF NOT EXISTS public.sensor_observations (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
+    source_topic TEXT,
+    source_partition INT,
+    source_offset BIGINT,
     sensor_id VARCHAR(100) NOT NULL,
     event_time TIMESTAMPTZ NOT NULL,
     latitude DOUBLE PRECISION NOT NULL,
@@ -119,8 +114,12 @@ CREATE TABLE IF NOT EXISTS public.sensor_observations (
 );
 
 -- 4.6 Real-Time Live Weather Stream (Streaming Flink target)
+-- One row per distinct station observation; repeat polls dedupe on (station_id, event_time).
 CREATE TABLE IF NOT EXISTS public.weather_stream_observations (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
+    source_topic TEXT,
+    source_partition INT,
+    source_offset BIGINT,
     station_id VARCHAR(100) NOT NULL,
     city_name VARCHAR(100),
     event_time TIMESTAMPTZ NOT NULL,
@@ -133,8 +132,11 @@ CREATE TABLE IF NOT EXISTS public.weather_stream_observations (
     cloud_cover_pct DOUBLE PRECISION,
     rainfall_1h_mm DOUBLE PRECISION,
     weather_condition VARCHAR(50),
+    api_poll_ms INT,
     quality_flag VARCHAR(20) DEFAULT 'GOOD',
     window_avg_temp DOUBLE PRECISION,
+    window_max_temp DOUBLE PRECISION,
+    window_min_temp DOUBLE PRECISION,
     is_anomaly BOOLEAN DEFAULT FALSE,
     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_weather_stream UNIQUE (station_id, event_time)
@@ -168,7 +170,23 @@ CREATE TABLE IF NOT EXISTS public.data_products (
     sla_quality_pass_rate FLOAT,
     output_port_rest TEXT,
     output_port_graphql TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    schema_version VARCHAR(20),
+    status VARCHAR(20) DEFAULT 'active',
+    tags TEXT[],
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4.8b GDPR: fields holding PII and how they are masked
+CREATE TABLE IF NOT EXISTS public.gdpr_field_registry (
+    id SERIAL PRIMARY KEY,
+    table_name VARCHAR(100),
+    field_name VARCHAR(100),
+    pii_category VARCHAR(50),
+    masking_strategy VARCHAR(50),
+    retention_days INT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_gdpr_field UNIQUE (table_name, field_name)
 );
 
 -- 4.9 Lineage Events Store (OpenLineage Audit Trail)
@@ -183,6 +201,29 @@ CREATE TABLE IF NOT EXISTS public.lineage_events (
     event_time TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 4.10 Streaming schema upgrade for databases created before the Flink job was wired in.
+-- Safe to re-run: psql -f scripts/init_postgis.sql against an existing volume.
+ALTER TABLE public.sensor_observations ADD COLUMN IF NOT EXISTS source_topic TEXT;
+ALTER TABLE public.sensor_observations ADD COLUMN IF NOT EXISTS source_partition INT;
+ALTER TABLE public.sensor_observations ADD COLUMN IF NOT EXISTS source_offset BIGINT;
+ALTER TABLE public.weather_stream_observations ADD COLUMN IF NOT EXISTS source_topic TEXT;
+ALTER TABLE public.weather_stream_observations ADD COLUMN IF NOT EXISTS source_partition INT;
+ALTER TABLE public.weather_stream_observations ADD COLUMN IF NOT EXISTS source_offset BIGINT;
+ALTER TABLE public.weather_stream_observations ADD COLUMN IF NOT EXISTS api_poll_ms INT;
+ALTER TABLE public.weather_stream_observations ADD COLUMN IF NOT EXISTS window_max_temp DOUBLE PRECISION;
+ALTER TABLE public.weather_stream_observations ADD COLUMN IF NOT EXISTS window_min_temp DOUBLE PRECISION;
+
+-- 4.11 Batch schema upgrade for databases created before this version. Safe to re-run.
+ALTER TABLE public.vector_features ADD COLUMN IF NOT EXISTS osm_type VARCHAR(10) NOT NULL DEFAULT 'node';
+ALTER TABLE public.vector_features DROP CONSTRAINT IF EXISTS vector_features_osm_id_key;
+ALTER TABLE public.admin_boundaries ADD COLUMN IF NOT EXISTS data_product_id VARCHAR(100);
+ALTER TABLE public.admin_boundaries ADD COLUMN IF NOT EXISTS osm_relation_id BIGINT;
+ALTER TABLE public.admin_boundaries ADD COLUMN IF NOT EXISTS wikidata_id VARCHAR(20);
+ALTER TABLE public.data_products ADD COLUMN IF NOT EXISTS schema_version VARCHAR(20);
+ALTER TABLE public.data_products ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
+ALTER TABLE public.data_products ADD COLUMN IF NOT EXISTS tags TEXT[];
+ALTER TABLE public.data_products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 -- =============================================================================
 -- 5. SPATIAL & PERFORMANCE INDEXING
 -- =============================================================================
@@ -196,63 +237,56 @@ CREATE INDEX IF NOT EXISTS idx_sensor_obs_geom ON public.sensor_observations USI
 CREATE INDEX IF NOT EXISTS idx_weather_stream_geom ON public.weather_stream_observations USING GIST (geom);
 
 -- B-Tree Temporal & Lookup Indexes
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vector_features_osm ON public.vector_features (osm_type, osm_id);
 CREATE INDEX IF NOT EXISTS idx_vector_features_type ON public.vector_features (feature_type);
 CREATE INDEX IF NOT EXISTS idx_satellite_obs_time ON public.satellite_observations (acquisition_time DESC);
 CREATE INDEX IF NOT EXISTS idx_weather_obs_station_time ON public.weather_observations (station_id, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_obs_time ON public.sensor_observations (event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_obs_anomaly ON public.sensor_observations (is_anomaly) WHERE is_anomaly = TRUE;
 CREATE INDEX IF NOT EXISTS idx_weather_stream_time ON public.weather_stream_observations (event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_sensor_obs_sensor_time ON public.sensor_observations (sensor_id, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_weather_stream_station_time ON public.weather_stream_observations (station_id, event_time DESC);
+
+-- Idempotency keys for the Flink JDBC sinks. Legacy rows with NULL source_* are allowed.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sensor_observations_source
+    ON public.sensor_observations (source_topic, source_partition, source_offset);
 
 -- =============================================================================
--- 6. SEED DATA (Kerala District Boundaries & Spatial Ground Truth)
+-- 6. SEED DATA (Data Mesh registry and GDPR registry)
 -- =============================================================================
 
-INSERT INTO public.admin_boundaries (region_id, name, admin_level, country_code, domain_owner, geometry)
-VALUES
-    (
-        'KL_TVM',
-        'Thiruvananthapuram',
-        6,
-        'IND',
-        'District Administration',
-        ST_Multi(ST_GeomFromText('POLYGON((76.75 8.25, 77.20 8.25, 77.20 8.75, 76.75 8.75, 76.75 8.25))', 4326))
-    ),
-    (
-        'KL_EKM',
-        'Ernakulam',
-        6,
-        'IND',
-        'District Administration',
-        ST_Multi(ST_GeomFromText('POLYGON((76.10 9.75, 76.70 9.75, 76.70 10.25, 76.10 10.25, 76.10 9.75))', 4326))
-    ),
-    (
-        'KL_KKD',
-        'Kozhikode',
-        6,
-        'IND',
-        'District Administration',
-        ST_Multi(ST_GeomFromText('POLYGON((75.60 11.10, 76.10 11.10, 76.10 11.65, 75.60 11.65, 75.60 11.10))', 4326))
-    ),
-    (
-        'KL_TCR',
-        'Thrissur',
-        6,
-        'IND',
-        'District Administration',
-        ST_Multi(ST_GeomFromText('POLYGON((75.95 10.20, 76.55 10.20, 76.55 10.75, 75.95 10.75, 75.95 10.20))', 4326))
-    )
-ON CONFLICT (region_id) DO UPDATE SET
-    geometry = EXCLUDED.geometry,
-    name = EXCLUDED.name;
+-- admin_boundaries is filled with real OSM polygons by the admin_boundaries_ingest DAG.
 
 -- Seed Data Mesh Product Registry
 INSERT INTO public.data_products
     (product_id, name, domain, owner_team, description, sla_freshness_hours, sla_quality_pass_rate, output_port_rest, output_port_graphql)
 VALUES
+    ('satellite_imagery', 'Satellite Imagery Observations', 'Remote Sensing', 'RS Team',
+     'Sentinel-2 scene metadata with spatial bounding boxes and cloud cover', 24, 95.0,
+     '/imagery', 'query { imagery { sceneId cloudPercentage } }'),
+    ('weather_data', 'Environmental Conditions', 'Climate', 'Climate Team',
+     'Clean live weather enriched with Kerala districts', 2, 98.0,
+     '/weather', 'query { weather { stationId temperatureC } }'),
     ('osm_vector_product', 'Kerala Critical Vector Infrastructure', 'Geospatial Assets', 'Angel Team',
      'Standardized OpenStreetMap vector layers (hospitals, roads, emergency shelters)', 168, 98.0,
-     '/api/v1/vectors/kerala', 'query { vectorFeatures { osmId name geometry } }'),
+     '/vector/features', NULL),
     ('climate_spatial_mart', 'Spatial Climate & Extreme Weather Mart', 'Environmental Intelligence', 'Angel Team',
      'Curated Gold mart intersecting satellite scenes, weather metrics, and buffered critical infrastructure', 24, 95.0,
-     '/api/v1/marts/spatial-climate', 'query { spatialClimateMart { regionName heatIndex hospitalCount } }')
+     NULL, NULL),
+    ('iot_sensor_stream', 'Real-Time IoT Sensor Observations', 'IoT', 'Lubaba Team',
+     'Validated MQTT sensor readings (sensor.live) with Flink z-score anomaly flags and nearest-station ambient weather', 1, 90.0,
+     '/sensors', 'query { sensors { sensorId value isAnomaly } }'),
+    ('live_weather_stream', 'Live Weather Stream Observations', 'Climate', 'Lubaba Team',
+     'OpenWeatherMap observations for Kerala stations (weather.live), deduplicated per station with temperature anomaly flags', 1, 95.0,
+     '/weather', 'query { weather { stationId temperatureC } }')
 ON CONFLICT (product_id) DO NOTHING;
+
+-- Seed GDPR registry (location data is PII)
+INSERT INTO public.gdpr_field_registry (table_name, field_name, pii_category, masking_strategy, retention_days)
+VALUES
+    ('sensor_observations', 'latitude', 'location', 'truncate_2dp', 365),
+    ('sensor_observations', 'longitude', 'location', 'truncate_2dp', 365),
+    ('weather_observations', 'location', 'location', 'null', 730),
+    ('weather_stream_observations', 'latitude', 'location', 'truncate_2dp', 365),
+    ('weather_stream_observations', 'longitude', 'location', 'truncate_2dp', 365)
+ON CONFLICT (table_name, field_name) DO NOTHING;

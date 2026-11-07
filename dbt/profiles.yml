@@ -6,7 +6,7 @@ geoplatform:
       host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
       port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
       user: "{{ env_var('POSTGRES_USER', 'geoplatform') }}"
-      password: "{{ env_var('POSTGRES_PASSWORD', 'geoplatform_secure_pass_2026') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
       dbname: "{{ env_var('POSTGRES_DB', 'geoplatform') }}"
       schema: public
       threads: 4
