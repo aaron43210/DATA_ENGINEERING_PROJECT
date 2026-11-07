@@ -85,6 +85,8 @@ x-airflow-common: &airflow-common
     - ./data_quality:/opt/airflow/data_quality
     - airflow_logs:/opt/airflow/logs
   user: "${AIRFLOW_UID:-50000}:0"
+  networks:
+    - geoplatform-net
   depends_on:
     postgres:
       condition: service_healthy
