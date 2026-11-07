@@ -12,7 +12,7 @@ with staged_satellite as (
 
 select
     scene_id,
-    satellite_name,
+    satellite as satellite_name,
     acquisition_time,
     cloud_percentage,
     
@@ -24,7 +24,7 @@ select
     end as image_quality,
     
     s3_bronze_path,
-    geometry_polygon
+    footprint_geom as geometry_polygon
 from staged_satellite
 
 -- Only expose scenes that are reasonably usable to the API
