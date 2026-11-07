@@ -19,8 +19,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s [%
 logger = logging.getLogger("sensor-producer")
 REDPANDA_BROKERS = os.getenv("REDPANDA_BROKERS", "redpanda:9092")
 SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://redpanda:8081")
-TOPIC = "sensor.live"
-DLT_TOPIC = "sensor.dead-letter"
+TOPIC = os.getenv("TOPIC_SENSOR_LIVE", "sensor.live")
+DLT_TOPIC = os.getenv("TOPIC_SENSOR_DLT", "sensor.dead-letter")
 MQTT_BROKER = os.getenv("MQTT_BROKER", "")
 MQTT_TLS = os.getenv("MQTT_TLS", "true").lower() in {"1", "true", "yes"}
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883" if MQTT_TLS else "1883"))
@@ -192,6 +192,7 @@ def publish_payload(client, producer, serializer, msg):
                               "mqtt_mid": msg.mid, "reason": str(exc),
                               "payload_utf8": msg.payload.decode("utf-8", errors="replace")})
             delivery = {"done": False, "error": None}
+
             def quarantined(err, _kafka_msg):
                 delivery["done"], delivery["error"] = True, err
             producer.produce(DLT_TOPIC, key=str(msg.mid).encode(), value=dlt.encode(), on_delivery=quarantined)

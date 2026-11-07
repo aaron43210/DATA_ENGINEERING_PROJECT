@@ -13,8 +13,9 @@ COPY requirements.txt /opt/flink/requirements.txt
 RUN pip3 install --no-cache-dir -r /opt/flink/requirements.txt
 COPY --from=kafka-connector-build /build/target/sensor-source-envelope-1.0.0.jar /opt/flink/lib/
 COPY --from=kafka-connector-build /build/target/runtime-dependencies/ /opt/flink/lib/
-COPY jobs/ /opt/flink/jobs/
+COPY jobs/geoplatform_stream_job.py jobs/stream_logic.py jobs/submit_and_monitor.sh /opt/flink/jobs/
 ENV PYTHONPATH=/opt/flink/jobs
 RUN mkdir -p /opt/flink/checkpoints && chown -R flink:flink /opt/flink/checkpoints
-RUN POSTGRES_PASSWORD=build-check python3 -c "from sensor_flink_job import build_job; print(build_job().get_execution_plan())"
+# Fail the image build if the job graph cannot be constructed.
+RUN POSTGRES_PASSWORD=build-check python3 -c "from geoplatform_stream_job import build_job; print(build_job().get_execution_plan())" > /dev/null
 USER flink
