@@ -69,6 +69,7 @@ x-airflow-common: &airflow-common
     OVERPASS_TIMEOUT_SECONDS: ${OVERPASS_TIMEOUT_SECONDS:-180}
     OVERPASS_BBOX: ${OVERPASS_BBOX:-8.1,74.8,12.8,77.5}
     QUALITY_MIN_PASS_RATE: ${QUALITY_MIN_PASS_RATE:-95.0}
+    OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}   # weather_historical_backfill fails fast without it
     # Iceberg Catalog
     ICEBERG_REST_URI: http://iceberg-rest:8181
     ICEBERG_WAREHOUSE: s3://${BUCKET_WAREHOUSE:-warehouse}/
