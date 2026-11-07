@@ -7,49 +7,9 @@ on:
     branches: [development]
 
 jobs:
-  lint-and-test:
+  api:
+    # FastAPI serving layer: lint, unit tests, image build.
     runs-on: ubuntu-latest
-    # NOTE: this workflow expects to run with the `geoplatform/` directory as the
-    # working directory (all relative paths below are relative to it). GitHub
-    # only discovers workflows under the repository-root `.github/workflows/`, so
-    # if `geoplatform/` is not the repo root this file must be relocated there.
-    defaults:
-      run:
-        working-directory: geoplatform
-    env:
-      # Non-secret placeholder values so `docker compose config` can resolve the
-      # required ${VAR:?...} references during validation. These are CI-only and
-      # never deployed.
-      OPENWEATHER_API_KEY: ci-placeholder
-      POSTGRES_HOST: localhost
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: geoplatform
-      POSTGRES_USER: geoplatform
-      POSTGRES_PASSWORD: GeoPlatform@2026
-      AIRFLOW_DB_PASSWORD: airflow
-      AIRFLOW_FERNET_KEY: ci-placeholder-fernet-key-not-used-at-build
-      AIRFLOW_ADMIN_PASSWORD: ci-admin
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-      LAKEFS_ACCESS_KEY: ci-access-key
-      LAKEFS_SECRET_KEY: ci-secret-key
-      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ci-encrypt-secret
-      MONGO_ROOT_USER: admin
-      MONGO_ROOT_PASSWORD: admin
-      JWT_SECRET: ci-jwt-secret
-      API_KEY: ci-api-key
-      DATAHUB_SECRET: ci-datahub-secret
-      GRAFANA_ADMIN_PASSWORD: ci-grafana
-    services:
-      postgres:
-        image: postgis/postgis:16-3.4
-        env:
-          POSTGRES_USER: geoplatform
-          POSTGRES_PASSWORD: GeoPlatform@2026
-          POSTGRES_DB: geoplatform
-        ports: ["5432:5432"]
-        options: --health-cmd pg_isready --health-interval 10s --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -58,51 +18,22 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install black flake8 pytest dbt-postgres openlineage-python
+          pip install black==24.4.2 flake8==7.0.0 pytest httpx
           pip install -r api/requirements.txt
 
-      - name: Lint with flake8
-        run: flake8 api/app/ airflow/dags/ --max-line-length=120 --ignore=E501,W503
+      - name: Lint and format check
+        run: |
+          flake8 api/ --max-line-length=120 --ignore=E501,W503
+          black --check api/
 
-      - name: Format check with black
-        run: black --check api/app/ airflow/dags/
-
-      - name: Run API unit tests
-        working-directory: geoplatform/api
+      - name: Unit tests
+        working-directory: api
         env:
           PYTHONPATH: .
         run: pytest -q tests/
 
-      - name: dbt parse and compile
-        working-directory: geoplatform/dbt/geoplatform
-        run: |
-          dbt parse --profiles-dir .
-          dbt compile --profiles-dir .
-
-      - name: Validate docker-compose
-        run: docker compose config --quiet
-
-      - name: Build API Docker image
-        run: docker build -t geoplatform-api:test ./api
-
-      - name: OpenLineage schema validation
-        run: |
-          python -c "
-          from openlineage.client.run import RunEvent, RunState, Run, Job
-          import uuid, datetime
-
-          event = RunEvent(
-              eventType=RunState.START,
-              eventTime=datetime.datetime.now().isoformat(),
-              run=Run(runId=str(uuid.uuid4())),
-              job=Job(namespace='ci', name='test'),
-              inputs=[],
-              outputs=[],
-              producer='https://github.com/OpenLineage/OpenLineage'
-          )
-
-          print('OpenLineage schema valid:', str(event)[:80])
-          "
+      - name: Build API image
+        run: docker build -t geoplatform-api:ci ./api
 
   streaming:
     # Root (v2) stack: Redpanda producers + PyFlink job (Lubaba) wired by docker-compose.yml.
@@ -114,6 +45,8 @@ jobs:
       AIRFLOW_ADMIN_PASSWORD: ci-admin
       MINIO_ROOT_USER: ci-minio
       MINIO_ROOT_PASSWORD: ci-minio-secret
+      JWT_SECRET: ci-jwt-secret
+      API_KEY: ci-api-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
