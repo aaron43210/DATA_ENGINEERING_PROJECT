@@ -1,31 +1,33 @@
-{{ config(
-    materialized='view'
-) }}
-
 /*
-  Staging model for weather station observations.
+  Staging model for the live weather stream written by Flink (team contract C1).
 */
 
-with source_weather as (
-    select * from {{ source('geoplatform', 'weather_observations') }}
+with source as (
+    select * from {{ source('geoplatform', 'weather_stream_observations') }}
 ),
 
 renamed as (
     select
         station_id,
-        observed_at,
+        city_name,
+        event_time,
+        latitude,
+        longitude,
         temperature_c,
         humidity_pct,
-        coalesce(rainfall_mm, 0.0) as rainfall_mm,
         wind_speed_ms,
         cloud_cover_pct,
-        location as station_geom,
-        ST_X(location) as longitude,
-        ST_Y(location) as latitude,
-        ingested_at
-    from source_weather
-    where location is not null
-      and ST_IsValid(location)
+        rainfall_1h_mm,
+        weather_condition,
+        quality_flag,
+        is_anomaly,
+        window_avg_temp,
+        window_max_temp,
+        window_min_temp,
+        processed_at as row_ingested_at
+    from source
+    -- Exclude API errors from downstream models
+    where quality_flag != 'API_ERROR'
 )
 
 select * from renamed

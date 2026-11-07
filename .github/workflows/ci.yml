@@ -2,9 +2,9 @@ name: CI Pipeline
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, development]
   push:
-    branches: [develop]
+    branches: [development]
 
 jobs:
   lint-and-test:
@@ -85,7 +85,6 @@ jobs:
       - name: Build API Docker image
         run: docker build -t geoplatform-api:test ./api
 
-      - 
       - name: OpenLineage schema validation
         run: |
           python -c "
@@ -105,3 +104,80 @@ jobs:
           print('OpenLineage schema valid:', str(event)[:80])
           "
 
+  streaming:
+    # Root (v2) stack: Redpanda producers + PyFlink job (Lubaba) wired by docker-compose.yml.
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-postgres
+      AIRFLOW_DB_PASSWORD: ci-airflow
+      AIRFLOW_FERNET_KEY: ci-placeholder-fernet-key-not-used-at-build
+      AIRFLOW_ADMIN_PASSWORD: ci-admin
+      MINIO_ROOT_USER: ci-minio
+      MINIO_ROOT_PASSWORD: ci-minio-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt flake8
+
+      - name: Lint producers and Flink job
+        run: flake8 redpanda/ flink/jobs/ tests/ --max-line-length=130 --ignore=E501,W503,E701,E704,E731
+
+      - name: Unit tests (producers, stream logic, compose/schema contracts)
+        run: python -m pytest -q tests/
+
+      - name: Validate docker-compose (all profiles)
+        run: docker compose --profile weather --profile sensor config --quiet
+
+      - name: Build producer images
+        run: |
+          docker build -t geoplatform-sensor-producer:ci redpanda/producer
+          docker build -t geoplatform-weather-producer:ci redpanda/weather_producer
+
+      - name: Build Flink image (compiles connector and builds the job graph)
+        run: docker build -t geoplatform-flink:ci flink
+
+  batch-and-transform:
+    # Root (v2) stack: applies the real schema and runs dbt against it, so a column
+    # mismatch between models and tables fails here. `dbt compile` alone cannot catch that.
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: geoplatform
+      POSTGRES_USER: geoplatform
+      POSTGRES_PASSWORD: ci-postgres
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: geoplatform
+          POSTGRES_PASSWORD: ci-postgres
+          POSTGRES_DB: geoplatform
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install black==24.4.2 flake8==7.0.0 dbt-core==1.11.17 dbt-postgres==1.11.0
+
+      - name: Lint DAGs and Iceberg loader
+        run: |
+          flake8 dags/ iceberg/ --max-line-length=120 --ignore=E501,W503
+          black --check dags/ iceberg/
+
+      - name: Apply database schema
+        env:
+          PGPASSWORD: ci-postgres
+        run: psql -h localhost -U geoplatform -d geoplatform -v ON_ERROR_STOP=1 -f scripts/init_postgis.sql
+
+      - name: dbt build
+        working-directory: dbt
+        run: dbt build --profiles-dir .
