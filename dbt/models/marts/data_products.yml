@@ -15,12 +15,64 @@ models:
       - name: event_time
         data_tests:
           - not_null
+      - name: temperature_c
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: -50
+                max_value: 60
       - name: humidity_pct
         data_tests:
           - accepted_range:
               arguments:
                 min_value: 0
                 max_value: 100
+      - name: cloud_cover_pct
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+      - name: heat_index_category
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Extreme Heat', 'High Heat', 'Warm', 'Comfortable', 'Cool']
+      - name: rainfall_intensity
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['No Rain', 'Light Rain', 'Moderate Rain', 'Heavy Rain', 'Extreme Rain']
+
+  - name: satellite_observation
+    description: "Gold data product: usable Sentinel-2 scenes over Kerala, served at /imagery"
+    meta:
+      domain: Earth Observation
+      owner: Aaron Team
+      data_product_id: satellite_imagery
+      sla_freshness_hours: 24
+    columns:
+      - name: scene_id
+        data_tests:
+          - unique
+          - not_null
+      - name: acquisition_time
+        data_tests:
+          - not_null
+      - name: satellite_name
+        data_tests:
+          - not_null
+      - name: cloud_percentage
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+      - name: image_quality
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Excellent', 'Good', 'Poor']
 
   - name: fct_spatial_climate_mart
     description: "Gold data product: one row per OSM feature with its district, newest scene and nearest weather"
