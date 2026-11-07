@@ -43,6 +43,7 @@ jobs:
       AIRFLOW_DB_PASSWORD: ci-airflow
       AIRFLOW_FERNET_KEY: ci-placeholder-fernet-key-not-used-at-build
       AIRFLOW_ADMIN_PASSWORD: ci-admin
+      AIRFLOW_SECRET_KEY: ci-webserver-secret
       MINIO_ROOT_USER: ci-minio
       MINIO_ROOT_PASSWORD: ci-minio-secret
       JWT_SECRET: ci-jwt-secret
