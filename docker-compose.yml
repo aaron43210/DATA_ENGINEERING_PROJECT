@@ -12,6 +12,7 @@
 #   flink-jobmanager    Flink cluster coordinator (UI on host port 8083)
 #   flink-taskmanager   Flink worker
 #   flink-job-submit    Submits and supervises flink/jobs/geoplatform_stream_job.py
+#   api                 FastAPI REST serving the Gold data products (host port 8000)
 #
 # Producers (opt-in profiles, they need external credentials):
 #   --profile weather   weather-producer  (OPENWEATHER_API_KEY)
@@ -436,6 +437,30 @@ services:
         condition: service_healthy
       flink-taskmanager:
         condition: service_started
+
+  # ── 12. FastAPI: Gold data products over REST ──────────────────────────────
+  api:
+    build: ./api
+    image: geoplatform-api:${GEOPLATFORM_IMAGE_TAG:-latest}
+    container_name: geoplatform-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
+      JWT_SECRET: ${JWT_SECRET:?set in .env}
+      API_KEY: ${API_KEY:?set in .env}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - geoplatform-net
 
 networks:
   geoplatform-net:
