@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
@@ -20,7 +20,7 @@ SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
 MAX_SOURCE_AGE_SEC = int(os.getenv("MAX_WEATHER_AGE_SECONDS", "900"))
-TOPIC = "weather.live"
+TOPIC = os.getenv("TOPIC_WEATHER_LIVE", "weather.live")
 OWM_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 STATIONS = [
     {"station_id": "WX_TVM", "city_name": "Thiruvananthapuram", "lat": 8.5241, "lon": 76.9366},
@@ -31,6 +31,10 @@ STATIONS = [
 ]
 SCHEMA_STR = Path(__file__).with_name("weather_event.avsc").read_text(encoding="utf-8")
 NUMERIC_FIELDS = ("temperature_c", "humidity_pct", "wind_speed_ms", "cloud_cover_pct", "rainfall_1h_mm")
+
+
+class InvalidApiKey(RuntimeError):
+    """OpenWeatherMap rejected the key (HTTP 401). Fatal: retrying cannot produce real data."""
 
 
 def _number(value, name, low=None, high=None):
@@ -102,12 +106,15 @@ def fetch_weather(station, api_key=None, session=requests):
         logger.error("OPENWEATHER_API_KEY is missing or still a placeholder; emitting API_ERROR")
         return None
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10),
+           retry=retry_if_not_exception_type(InvalidApiKey), reraise=True)
     def request():
         started = time.monotonic()
         response = session.get(OWM_API_URL, params={
             "lat": station["lat"], "lon": station["lon"], "appid": key, "units": "metric",
         }, timeout=10)
+        if response.status_code == 401:
+            raise InvalidApiKey("OpenWeatherMap rejected OPENWEATHER_API_KEY (HTTP 401)")
         response.raise_for_status()
         return response.json(), int((time.monotonic() - started) * 1000)
 
@@ -186,6 +193,9 @@ def main():
             if producer.flush(15):
                 logger.error("Timed out flushing weather records")
             time.sleep(max(0, POLL_INTERVAL_SEC - (time.monotonic() - started)))
+    except InvalidApiKey as exc:
+        # New OpenWeatherMap keys can take a couple of hours to activate.
+        raise SystemExit(f"{exc}; check the key or wait for it to activate") from None
     except KeyboardInterrupt:
         logger.info("Stopping weather producer")
     finally:

@@ -4,4 +4,6 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY weather_event.avsc ./weather_event.avsc
 COPY weather_producer.py ./weather_producer.py
+RUN useradd --system --uid 10001 --no-create-home producer
+USER producer
 CMD ["python", "-u", "weather_producer.py"]
