@@ -1,148 +1,98 @@
 # Cloud-Native Geospatial Data Platform
 
 ## Project Overview
-This project is a modern, distributed microservices data platform designed for the ingestion, processing, storage, and serving of geospatial and environmental data. It leverages a cloud-native architecture to handle both high-velocity streaming data (IoT sensors, live weather) and batch data processing (satellite imagery metadata, OpenStreetMap vectors).
+The platform ingests geospatial and environmental data for Kerala (Sentinel-2 scenes, OpenStreetMap features, weather and IoT sensor readings), refines it through a Bronze → Silver → Gold medallion, and serves the Gold data products to users over a REST API. Streaming data (IoT sensors, live weather) and batch data (satellite metadata, OSM vectors, weather history) share the same storage layers.
 
-The platform enforces data governance, data mesh principles, and GDPR compliance while exposing the finalized "Gold" data products through both REST and GraphQL APIs.
+See `architecture.md` for the data flow and the AWS mapping, and `connections.md` for hosts, ports and topic contracts.
 
 ## Architecture
 
-The platform follows a Distributed Data Architecture (Modern Data Stack) pattern, completely decoupled across 16 containerized microservices. 
-
-1. **Data Sources**: Sentinel-2 STAC API, OpenWeatherMap API, OSM Overpass API, Simulated IoT Sensors.
-2. **Ingestion Layer (Batch & Stream)**: Airflow orchestrates ELT/ETL DAGs. Python producers publish live events to Redpanda topics using Avro schemas.
-3. **Stream Processing**: Apache Flink consumes from Redpanda for real-time spatial joins, rolling window aggregations, and Z-score anomaly detection.
-4. **Data Lake & Storage**: MinIO holds the Bronze/Silver/Gold layers. Apache Iceberg tables on MinIO provide versioning and time travel. PostgreSQL (with PostGIS) is the relational and spatial warehouse.
-5. **Data Transformation**: dbt (Data Build Tool) executes complex spatial joins and data mart generation over the loaded data.
-6. **Serving Layer**: A FastAPI application serves the data through REST endpoints and a Strawberry GraphQL schema, incorporating automated PII/GDPR masking.
-7. **Observability & Governance**: Prometheus and Grafana handle metrics and alerting. OpenLineage tracks data provenance and pushes events to DataHub.
+1. **Sources**: Sentinel-2 STAC API, OpenWeatherMap API, OSM Overpass API, IoT sensors over MQTT.
+2. **Ingestion**: Airflow DAGs land batch data; Python producers publish live events to Redpanda as Avro.
+3. **Bronze**: MinIO holds every raw object as JSONL, immutable and partitioned by source, date and hour.
+4. **Stream processing**: Flink validates events, flags z-score anomalies, joins each sensor to its nearest weather station and writes PostGIS.
+5. **Silver**: Apache Iceberg tables on MinIO, loaded from Bronze and from the streaming tables. Versioned, with time travel.
+6. **Gold**: dbt builds spatial marts in PostGIS; dbt tests are the data quality gate.
+7. **Serving**: FastAPI REST with API key or JWT auth and GDPR coordinate masking.
 
 ## Technology Stack
-- **Message Broker**: Redpanda, Schema Registry (Avro)
-- **Stream Processing**: Apache Flink, PyFlink
-- **Batch Orchestration**: Apache Airflow
-- **Data Transformation**: dbt (Data Build Tool)
-- **Database**: PostgreSQL, PostGIS
-- **Object Storage**: MinIO, Apache Iceberg
-- **Serving**: FastAPI, GraphQL (Strawberry), Uvicorn
-- **Observability**: Prometheus, Grafana, OpenLineage
-- **Infrastructure**: Docker, Docker Compose
+- **Message broker**: Redpanda, Schema Registry (Avro)
+- **Stream processing**: Apache Flink (PyFlink)
+- **Orchestration**: Apache Airflow
+- **Object storage and lakehouse**: MinIO (S3 API), Apache Iceberg (REST catalog, PyIceberg)
+- **Warehouse**: PostgreSQL 16 + PostGIS 3.4
+- **Transformation and data tests**: dbt
+- **Serving**: FastAPI, Uvicorn
+- **Infrastructure**: Docker Compose locally; AWS later (see `architecture.md`)
 
 ## Repository Structure
 
-The project utilizes a monorepo structure where each root directory acts as a dedicated microservice or component:
+- `airflow/` - Airflow image (dbt and PyIceberg in their own virtualenvs)
+- `dags/` - Airflow DAGs for ingestion, Silver loads and dbt
+- `iceberg/` - Bronze → Silver and streaming → Silver loaders (PyIceberg)
+- `dbt/` - staging, intermediate and Gold mart models with their tests
+- `flink/` - PyFlink streaming job and its Kafka connector
+- `redpanda/` - sensor and weather producers, Avro schemas, console config
+- `api/` - FastAPI serving layer
+- `infra/minio/` - MinIO image and bucket/lifecycle setup
+- `scripts/` - PostgreSQL schema and Airflow database init
+- `tests/` - offline tests for producers, the Flink logic and the Silver sync
 
-- `/airflow` - DAGs for ETL/ELT pipelines and Data Quality checks.
-- `/api` - The FastAPI and GraphQL application, including database connection pooling and routers.
-- `/dbt` - SQL models for staging views, spatial joins, and Gold data mart materialization.
-- `/flink` - Real-time stream processing jobs and algorithms.
-- `/infra` - Database initialization scripts and environment configurations.
-- `/monitoring` - Prometheus scrape configs, alert rules, and Grafana dashboards.
-- `/redpanda` - Python producers, Avro schemas, and console configurations.
-
-## Setup and Quick Start (legacy `geoplatform/` stack)
-
-> The v2 stack lives at the repository root. See "Root (v2) Stack: Batch Path" and "Root (v2) Stack: Streaming Path" below. These steps describe the older `geoplatform/` folder, which still holds the API, Aaron's DAGs and monitoring until they are moved across.
-
-### Prerequisites
-- Docker and Docker Compose
-- Python 3.10+
-- Git
-
-### Bootstrapping the Platform
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/aaron43210/DATA_ENGINEERING_PROJECT.git
-   cd DATA_ENGINEERING_PROJECT/geoplatform
-   ```
-
-2. **Configure Environment Variables**
-   Ensure the `.env` file is present in the `geoplatform/` directory and `OPENWEATHER_API_KEY` is populated.
-
-3. **Start Core Infrastructure**
-   ```bash
-   bash setup.sh
-   docker compose up -d postgres minio mongodb redpanda
-   sleep 20
-   docker compose up minio-setup
-   docker compose up -d lakefs iceberg-rest redpanda-console
-   bash lakefs/setup_repos.sh
-   docker compose up airflow-init
-   docker compose up -d airflow-webserver airflow-scheduler datahub-quickstart
-   ```
-
-4. **Start Monitoring**
-   ```bash
-   docker compose up -d prometheus grafana
-   ```
-
-5. **Start Ingestion and Processing**
-   ```bash
-   docker compose up -d sensor-producer weather-producer
-   docker compose up -d flink-jobmanager flink-taskmanager
-   ```
-
-6. **Execute Batch Pipelines and Transformations**
-   Trigger the DAGs from the Airflow UI, then run dbt:
-   ```bash
-   cd dbt/geoplatform
-   dbt run --profiles-dir .
-   ```
-
-7. **Start the API Server**
-   ```bash
-   docker compose up -d api
-   ```
-
-## Root (v2) Stack: Batch Path
+## Quick Start
 
 ```bash
-cp .env.example .env        # then set every secret; on Linux set AIRFLOW_UID=$(id -u)
-docker compose build        # first build compiles MinIO from source (several minutes)
-docker compose up -d
-```
-
-| DAG | Trigger | What it does |
-|---|---|---|
-| `admin_boundaries_ingest` | Automatic on first boot, then monthly | Real polygons for Kerala's 14 districts from OSM |
-| `osm_elt_dag` | Sundays 04:00 UTC | Hospitals, clinics and main roads: Bronze, PostGIS, quality gate |
-| `bronze_to_silver` | New Bronze data | Loads Bronze into Iceberg Silver tables |
-| `dbt_transform` | PostGIS or weather data ready | `dbt build`: staging, intermediate, Gold |
-| `data_quality_dag` | After dbt | Great Expectations checks, recorded in `quality_runs` |
-
-MinIO is built from its official source (`infra/minio/`) because the free images were removed from Docker Hub and quay.io. The upstream repository is archived, so it receives no further security fixes. Bronze is private, versioned and expires after `BRONZE_RETENTION_DAYS`.
-
-Airflow DAGs other than `admin_boundaries_ingest` start paused: unpause them in the UI at http://localhost:8080.
-
-## Root (v2) Stack: Streaming Path
-
-The repository root holds the v2 stack (`docker-compose.yml`). Its streaming path is Lubaba's
-Redpanda producers and PyFlink job; see `architecture.md` → *Streaming Path (as built)* and
-`connections.md` for topics, ports and guarantees.
-
-```bash
-cp .env.example .env          # set passwords; OPENWEATHER_API_KEY and MQTT_* for the producers
-docker compose up -d --build  # postgres, minio, iceberg, redpanda (+topics, console), airflow, flink (+job submit)
+cp .env.example .env        # set every secret; on Linux set AIRFLOW_UID=$(id -u)
+docker compose up -d --build # first build compiles MinIO from source (several minutes)
 docker compose --profile weather up -d weather-producer   # needs OPENWEATHER_API_KEY
 docker compose --profile sensor  up -d sensor-producer    # needs MQTT_BROKER + credentials
 ```
 
-Verify the job itself, not just the containers:
+| UI / endpoint | URL |
+|---|---|
+| API docs (Swagger) | http://localhost:8000/docs |
+| Airflow | http://localhost:8080 |
+| Flink | http://localhost:8083 |
+| Redpanda Console | http://localhost:8088 |
+| MinIO console | http://localhost:9001 |
+
+DAGs other than `admin_boundaries_ingest` start paused: unpause them in the Airflow UI.
+
+| DAG | Trigger | What it does |
+|---|---|---|
+| `admin_boundaries_ingest` | First boot, then monthly | Real polygons for Kerala's 14 districts from OSM |
+| `osm_elt_dag` | Sundays 04:00 UTC | Hospitals, clinics and main roads: Bronze, PostGIS, spatial quality gate |
+| `sentinel2_ingest` | Daily 02:00 | Sentinel-2 scenes over Kerala: Bronze, PostGIS |
+| `weather_historical_backfill` | Daily 00:00 | Weather snapshot per station: Bronze, PostGIS (needs `OPENWEATHER_API_KEY`) |
+| `bronze_to_silver` | New Bronze data | Loads Bronze into Iceberg Silver tables |
+| `stream_to_silver` | Every 5 minutes | Copies new Flink rows from PostGIS into Iceberg Silver |
+| `dbt_transform` | New Bronze or PostGIS data | `dbt build`: staging, intermediate, Gold marts and their tests |
+
+Query the data products:
+
+```bash
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/datasets/   # the catalog
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/imagery/
+curl -H "X-API-Key: $API_KEY" "http://localhost:8000/sensors/?anomalies_only=true"
+```
+
+Check the streaming job itself, not just its containers:
 
 ```bash
 curl -fsS http://localhost:8083/jobs/overview        # geoplatform-stream must be RUNNING
 docker compose logs flink-job-submit
-docker compose exec postgres psql -U geoplatform -d geoplatform \
-  -c "SELECT sensor_id, measurement_type, value, is_anomaly, nearest_weather_station FROM sensor_observations ORDER BY id DESC LIMIT 10;"
 ```
 
-Redpanda Console: http://localhost:8088 · Flink UI: http://localhost:8083 · Schema Registry: http://localhost:8081
+MinIO is built from its official source (`infra/minio/`) because the free images were removed from Docker Hub and quay.io. The upstream repository is archived and receives no security fixes, so keep MinIO local; on AWS it is replaced by S3.
 
-Existing database volume? Re-run the idempotent schema to add the streaming columns:
+Existing database volume? Re-run the idempotent schema:
 `docker compose exec -T postgres psql -U geoplatform -d geoplatform < scripts/init_postgis.sql`
 
-Offline tests: `pip install -r requirements-test.txt && python -m pytest -q tests/`
+## Tests
+
+```bash
+pip install -r requirements-test.txt && python -m pytest -q tests/   # producers, Flink logic, Silver sync
+cd api && pip install -r requirements.txt pytest httpx && PYTHONPATH=. pytest -q tests/
+```
 
 ## Team Members and Contributions
 
