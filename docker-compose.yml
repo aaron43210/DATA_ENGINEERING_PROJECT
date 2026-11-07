@@ -1,23 +1,44 @@
-version: '3.8'
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Cloud-Native Geospatial Data Platform — Angel's Infrastructure Stack
+# Cloud-Native Geospatial Data Platform — root (v2) stack
 #
-# Services Orchestrated:
-#   1. postgres: PostgreSQL 16 + PostGIS 3.4
-#   2. minio: MinIO Object Storage (Bronze / Silver / Gold / Warehouse)
-#   3. minio-setup: Automates bucket provisioning (mc)
-#   4. iceberg-rest: Apache Iceberg REST Catalog (lakehouse metadata layer)
-#   5. redpanda: Streaming message broker (Kafka API compatible)
-#   6. airflow-init: Airflow DB migration & admin user setup
-#   7. airflow-webserver: Airflow UI & API (port 8080)
-#   8. airflow-scheduler: DAG execution engine
-#   9. flink-jobmanager: Apache Flink cluster coordinator (port 8081)
-#  10. flink-taskmanager: Apache Flink stream processing worker
+# Core services (start with `docker compose up -d`):
+#   postgres            PostgreSQL 16 + PostGIS 3.4
+#   minio, minio-setup  Object storage + bucket provisioning
+#   iceberg-rest        Apache Iceberg REST catalog
+#   redpanda            Kafka-compatible broker + Schema Registry
+#   redpanda-topics     Creates the streaming topics (one-shot)
+#   redpanda-console    Topic / schema UI (host port 8088)
+#   airflow-*           Batch orchestration (init, webserver, scheduler)
+#   flink-jobmanager    Flink cluster coordinator (UI on host port 8083)
+#   flink-taskmanager   Flink worker
+#   flink-job-submit    Submits and supervises flink/jobs/geoplatform_stream_job.py
+#
+# Producers (opt-in profiles, they need external credentials):
+#   --profile weather   weather-producer  (OPENWEATHER_API_KEY)
+#   --profile sensor    sensor-producer   (MQTT_BROKER + credentials)
 # ─────────────────────────────────────────────────────────────────────────────
+
+x-flink-common: &flink-common
+  build: ./flink
+  image: geoplatform-flink:${GEOPLATFORM_IMAGE_TAG:-latest}
+  restart: unless-stopped
+  volumes:
+    - flink_checkpoints:/opt/flink/checkpoints
+  networks:
+    - geoplatform-net
+
+x-flink-env: &flink-env
+  REDPANDA_BROKERS: redpanda:9092
+  SCHEMA_REGISTRY_URL: http://redpanda:8081
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+  POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
 
 x-airflow-common: &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.8.1-python3.10}
+  build: ./airflow
+  image: geoplatform-airflow:${GEOPLATFORM_IMAGE_TAG:-latest}
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:?set in .env}@postgres:5432/${AIRFLOW_DB_NAME:-airflow}
@@ -43,16 +64,25 @@ x-airflow-common: &airflow-common
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
     # Ingestion & Quality Parameters
     OVERPASS_API_URL: ${OVERPASS_API_URL:-https://overpass-api.de/api/interpreter}
+    OVERPASS_MIRROR_URLS: ${OVERPASS_MIRROR_URLS:-https://overpass.kumi.systems/api/interpreter}
+    OVERPASS_TIMEOUT_SECONDS: ${OVERPASS_TIMEOUT_SECONDS:-180}
+    OVERPASS_BBOX: ${OVERPASS_BBOX:-8.1,74.8,12.8,77.5}
     QUALITY_MIN_PASS_RATE: ${QUALITY_MIN_PASS_RATE:-95.0}
     # Iceberg Catalog
     ICEBERG_REST_URI: http://iceberg-rest:8181
-    ICEBERG_WAREHOUSE: s3://warehouse/
+    ICEBERG_WAREHOUSE: s3://${BUCKET_WAREHOUSE:-warehouse}/
+    # dbt and Great Expectations
+    DBT_TARGET_PATH: /tmp/dbt-target
+    DBT_LOG_PATH: /tmp/dbt-logs
+    GX_CONTEXT_ROOT: /opt/airflow/data_quality/gx
+    GX_PG_CONNECTION_STRING: postgresql+psycopg2://${POSTGRES_USER:-geoplatform}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-geoplatform}
     # Redpanda Broker
     REDPANDA_BROKERS: redpanda:9092
   volumes:
     - ./dags:/opt/airflow/dags
-    - ./scripts:/opt/airflow/scripts
     - ./dbt:/opt/airflow/dbt
+    - ./iceberg:/opt/airflow/iceberg:ro
+    - ./data_quality:/opt/airflow/data_quality
     - airflow_logs:/opt/airflow/logs
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
@@ -77,85 +107,84 @@ services:
       AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_airflow_db.sh:/docker-entrypoint-initdb.d/00_init_airflow_db.sh:ro
       - ./scripts/init_postgis.sql:/docker-entrypoint-initdb.d/01_init_postgis.sql:ro
     ports:
       - "5434:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-geoplatform} -d ${POSTGRES_DB:-geoplatform}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-geoplatform} -d ${POSTGRES_DB:-geoplatform}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - geoplatform-net
 
-  # ── 2. MinIO AIStor (Object Storage) ────────────────────────────────────────
+  # ── 2. MinIO (built from official source, no licence needed) ───────────────
   minio:
-    image: quay.io/minio/aistor/minio:latest
+    build: ./infra/minio
+    image: geoplatform-minio:${GEOPLATFORM_IMAGE_TAG:-latest}
     container_name: geoplatform-minio
     restart: unless-stopped
-
-    command: server /mnt/data --console-address ":9001" --license /minio.license
-
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set in .env}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
-
     volumes:
-      - minio_data:/mnt/data
-      - ./secrets/minio.license:/minio.license:ro
-
+      - minio_data:/data
     ports:
       - "9000:9000"
       - "9001:9001"
-
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
-
+      start_period: 10s
     networks:
       - geoplatform-net
 
-  # ── 3. MinIO Setup (Automated Bucket Provisioning) ─────────────────────────
+  # ── 3. MinIO Setup (buckets, private access, lifecycle policy) ─────────────
   minio-setup:
-    image: minio/mc:RELEASE.2024-01-28T22-13-53Z
+    image: geoplatform-minio:${GEOPLATFORM_IMAGE_TAG:-latest}
     container_name: geoplatform-minio-setup
     depends_on:
       minio:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Configuring MinIO client alias...';
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:?set in .env} ${MINIO_ROOT_PASSWORD:?set in .env};
-      echo 'Provisioning Bronze, Silver, Gold, and Warehouse buckets...';
-      mc mb local/${BUCKET_BRONZE:-bronze} --ignore-existing;
-      mc mb local/${BUCKET_SILVER:-silver} --ignore-existing;
-      mc mb local/${BUCKET_GOLD:-gold} --ignore-existing;
-      mc mb local/${BUCKET_WAREHOUSE:-warehouse} --ignore-existing;
-      mc anonymous set download local/${BUCKET_BRONZE:-bronze};
-      echo 'MinIO buckets initialized successfully.';
-      exit 0;
-      "
+    entrypoint: ["/bin/sh", "/setup.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+      BUCKET_BRONZE: ${BUCKET_BRONZE:-bronze}
+      BUCKET_SILVER: ${BUCKET_SILVER:-silver}
+      BUCKET_GOLD: ${BUCKET_GOLD:-gold}
+      BUCKET_WAREHOUSE: ${BUCKET_WAREHOUSE:-warehouse}
+      BRONZE_RETENTION_DAYS: ${BRONZE_RETENTION_DAYS:-365}
+      BRONZE_NONCURRENT_DAYS: ${BRONZE_NONCURRENT_DAYS:-30}
+      HOME: /tmp
+    volumes:
+      - ./infra/minio/setup.sh:/setup.sh:ro
     networks:
       - geoplatform-net
 
   # ── 4. Apache Iceberg REST Catalog ─────────────────────────────────────────
   iceberg-rest:
-    image: tabulario/iceberg-rest:latest
+    image: tabulario/iceberg-rest:0.10.0
     container_name: geoplatform-iceberg-rest
     restart: unless-stopped
     ports:
       - "${ICEBERG_REST_PORT:-8181}:8181"
     environment:
-      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_WAREHOUSE: s3://${BUCKET_WAREHOUSE:-warehouse}/
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
       CATALOG_S3_ENDPOINT: http://minio:9000
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      # Without a file-backed catalog, table metadata is lost on every restart.
+      CATALOG_URI: jdbc:sqlite:file:/catalog/iceberg.db
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
       AWS_REGION: ${MINIO_REGION:-us-east-1}
+    user: root
+    volumes:
+      - iceberg_catalog:/catalog
     depends_on:
       minio-setup:
         condition: service_completed_successfully
@@ -164,7 +193,7 @@ services:
 
   # ── 5. Redpanda (Kafka-compatible Streaming Engine) ────────────────────────
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v23.3.4
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.6
     container_name: geoplatform-redpanda
     restart: unless-stopped
     command:
@@ -179,13 +208,110 @@ services:
       - --schema-registry-addr 0.0.0.0:8081
     ports:
       - "19092:19092"
-      - "8081:8081"
-      - "8082:8082"
+      - "8081:8081"   # Schema Registry
+      - "8082:8082"   # Pandaproxy
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks:
+      - geoplatform-net
+
+  # ── 5a. Topic provisioning (idempotent, one-shot) ──────────────────────────
+  redpanda-topics:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.6
+    container_name: geoplatform-redpanda-topics
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        for topic in ${TOPIC_SENSOR_LIVE:-sensor.live} ${TOPIC_WEATHER_LIVE:-weather.live} \
+                     ${TOPIC_SENSOR_DLT:-sensor.dead-letter} ${TOPIC_WEATHER_DLT:-weather.dead-letter} \
+                     ${TOPIC_QUALITY_ALERTS:-platform.quality.alerts}; do
+          if rpk topic describe "$$topic" --brokers redpanda:9092 >/dev/null 2>&1; then
+            echo "topic $$topic exists"
+          else
+            rpk topic create "$$topic" --brokers redpanda:9092 \
+              --partitions ${TOPIC_PARTITIONS:-3} --replicas 1 \
+              --topic-config retention.ms=${TOPIC_RETENTION_MS:-604800000}
+          fi
+        done
+    networks:
+      - geoplatform-net
+
+  # ── 5b. Redpanda Console (topics, consumer lag, Avro schemas) ──────────────
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.7.2
+    container_name: geoplatform-redpanda-console
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    environment:
+      CONFIG_FILEPATH: /etc/redpanda-console/config.yml
+    volumes:
+      - ./redpanda/console-config.yml:/etc/redpanda-console/config.yml:ro
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - geoplatform-net
+
+  # ── 5c. Weather producer: OpenWeatherMap → weather.live (Avro) ─────────────
+  weather-producer:
+    build: ./redpanda/weather_producer
+    image: geoplatform-weather-producer:${GEOPLATFORM_IMAGE_TAG:-latest}
+    container_name: geoplatform-weather-producer
+    restart: on-failure:5   # missing/invalid credentials must stop, not crash-loop
+    profiles: [weather]
+    environment:
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      TOPIC_WEATHER_LIVE: ${TOPIC_WEATHER_LIVE:-weather.live}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      MAX_WEATHER_AGE_SECONDS: ${MAX_WEATHER_AGE_SECONDS:-900}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redpanda-topics:
+        condition: service_completed_successfully
+    networks:
+      - geoplatform-net
+
+  # ── 5d. Sensor producer: MQTT → sensor.live (Avro) ─────────────────────────
+  sensor-producer:
+    build: ./redpanda/producer
+    image: geoplatform-sensor-producer:${GEOPLATFORM_IMAGE_TAG:-latest}
+    container_name: geoplatform-sensor-producer
+    restart: on-failure:5   # missing/invalid credentials must stop, not crash-loop
+    profiles: [sensor]
+    environment:
+      REDPANDA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      TOPIC_SENSOR_LIVE: ${TOPIC_SENSOR_LIVE:-sensor.live}
+      TOPIC_SENSOR_DLT: ${TOPIC_SENSOR_DLT:-sensor.dead-letter}
+      MQTT_BROKER: ${MQTT_BROKER:-}
+      MQTT_PORT: ${MQTT_PORT:-8883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-geoplatform/sensors/#}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      MQTT_TLS: ${MQTT_TLS:-true}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-}
+      MQTT_CA_CERT: ${MQTT_CA_CERT:-}
+      MQTT_CLIENT_CERT: ${MQTT_CLIENT_CERT:-}
+      MQTT_CLIENT_KEY: ${MQTT_CLIENT_KEY:-}
+      MQTT_KEY_PASSWORD: ${MQTT_KEY_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${MQTT_CERTS_DIR:-./secrets/mqtt-certs}:/run/mqtt-certs:ro
+    depends_on:
+      redpanda-topics:
+        condition: service_completed_successfully
     networks:
       - geoplatform-net
 
@@ -195,16 +321,14 @@ services:
     container_name: geoplatform-airflow-init
     entrypoint: >
       /bin/bash -c "
-      pip install boto3 psycopg2-binary requests dbt-postgres --quiet;
-      airflow db migrate;
-      airflow users create \
-        --username ${AIRFLOW_ADMIN_USER:-admin} \
-        --firstname Angel \
-        --lastname Engineer \
-        --role Admin \
-        --email ${AIRFLOW_ADMIN_EMAIL:-angel@geoplatform.local} \
-        --password ${AIRFLOW_ADMIN_PASSWORD:-admin_password_2026} || true;
-      exit 0;
+      airflow db migrate &&
+      airflow users create
+      --username ${AIRFLOW_ADMIN_USER:-admin}
+      --firstname Angel
+      --lastname Engineer
+      --role Admin
+      --email ${AIRFLOW_ADMIN_EMAIL:-angel@geoplatform.local}
+      --password ${AIRFLOW_ADMIN_PASSWORD:?set in .env}
       "
     depends_on:
       postgres:
@@ -239,37 +363,77 @@ services:
 
   # ── 9. Apache Flink JobManager ─────────────────────────────────────────────
   flink-jobmanager:
-    image: flink:1.18.1-scala_2.12-java11
+    <<: *flink-common
     container_name: geoplatform-flink-jobmanager
-    restart: unless-stopped
     command: jobmanager
     ports:
-      - "8081:8081"
+      - "8083:8081"   # Flink UI / REST (8081 on the host is the Schema Registry)
     environment:
-      - |
-        FLINK_PROPERTIES=
+      <<: *flink-env
+      FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+        rest.bind-address: 0.0.0.0
+        jobmanager.memory.process.size: ${FLINK_JOBMANAGER_MEMORY:-1024m}
         parallelism.default: ${FLINK_PARALLELISM:-2}
-        taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-4}
-    networks:
-      - geoplatform-net
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.checkpoints.num-retained: 3
+        execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+        restart-strategy.type: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 5s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/overview"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   # ── 10. Apache Flink TaskManager ───────────────────────────────────────────
   flink-taskmanager:
-    image: flink:1.18.1-scala_2.12-java11
+    <<: *flink-common
     container_name: geoplatform-flink-taskmanager
-    restart: unless-stopped
     command: taskmanager
     environment:
-      - |
-        FLINK_PROPERTIES=
+      <<: *flink-env
+      FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-4}
+        taskmanager.memory.process.size: ${FLINK_TASKMANAGER_MEMORY:-2048m}
         parallelism.default: ${FLINK_PARALLELISM:-2}
+        state.checkpoints.dir: file:///opt/flink/checkpoints
     depends_on:
-      - flink-jobmanager
-    networks:
-      - geoplatform-net
+      flink-jobmanager:
+        condition: service_healthy
+
+  # ── 11. Flink job submitter / supervisor (Lubaba's submit_and_monitor.sh) ──
+  flink-job-submit:
+    <<: *flink-common
+    container_name: geoplatform-flink-job-submit
+    entrypoint: ["/bin/bash", "/opt/flink/jobs/submit_and_monitor.sh"]
+    environment:
+      <<: *flink-env
+      FLINK_JOB_NAME: geoplatform-stream
+      FLINK_PARALLELISM: ${FLINK_PARALLELISM:-2}
+      TOPIC_SENSOR_LIVE: ${TOPIC_SENSOR_LIVE:-sensor.live}
+      TOPIC_WEATHER_LIVE: ${TOPIC_WEATHER_LIVE:-weather.live}
+      TOPIC_SENSOR_DLT: ${TOPIC_SENSOR_DLT:-sensor.dead-letter}
+      TOPIC_WEATHER_DLT: ${TOPIC_WEATHER_DLT:-weather.dead-letter}
+      TOPIC_QUALITY_ALERTS: ${TOPIC_QUALITY_ALERTS:-platform.quality.alerts}
+      KAFKA_GROUP_PREFIX: ${KAFKA_GROUP_PREFIX:-geoplatform-flink}
+      WATERMARK_OUT_OF_ORDER_SECONDS: ${WATERMARK_OUT_OF_ORDER_SECONDS:-10}
+      CHECKPOINT_INTERVAL_MS: ${CHECKPOINT_INTERVAL_MS:-10000}
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+    depends_on:
+      redpanda-topics:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      flink-jobmanager:
+        condition: service_healthy
+      flink-taskmanager:
+        condition: service_started
 
 networks:
   geoplatform-net:
@@ -283,3 +447,9 @@ volumes:
     name: geoplatform_minio_data
   airflow_logs:
     name: geoplatform_airflow_logs
+  iceberg_catalog:
+    name: geoplatform_iceberg_catalog
+  redpanda_data:
+    name: geoplatform_redpanda_data
+  flink_checkpoints:
+    name: geoplatform_flink_checkpoints

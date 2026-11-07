@@ -22,3 +22,7 @@ venv/
 .DS_Store
 # Downloaded MinIO source repository
 minio-source/
+
+# dbt build output
+dbt/target/
+dbt/logs/
