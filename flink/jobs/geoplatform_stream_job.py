@@ -30,7 +30,6 @@ from pyflink.datastream.checkpointing_mode import CheckpointingMode
 from pyflink.datastream.connectors.jdbc import JdbcConnectionOptions, JdbcExecutionOptions, JdbcSink
 from pyflink.datastream.connectors.kafka import (
     DeliveryGuarantee,
-    KafkaOffsetResetStrategy,
     KafkaOffsetsInitializer,
     KafkaRecordSerializationSchema,
     KafkaSink,
@@ -268,13 +267,24 @@ def _string_sink(topic):
             .build())
 
 
+def _committed_or_earliest():
+    """Resume from committed group offsets; earliest only for a brand-new group.
+
+    Built through the Java API because PyFlink's KafkaOffsetResetStrategy assumes the
+    shaded flink-sql-connector-kafka jar, while this image ships flink-connector-kafka.
+    """
+    jvm = get_gateway().jvm
+    initializer = jvm.org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer
+    return KafkaOffsetsInitializer(
+        initializer.committedOffsets(jvm.org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST))
+
+
 def _source(env, topic, name):
     builder = (KafkaSource.builder()
                .set_bootstrap_servers(BROKERS)
                .set_group_id(f"{GROUP_PREFIX}-{name}")
                .set_topics(topic)
-               # Resume from committed group offsets; earliest only for a brand-new group.
-               .set_starting_offsets(KafkaOffsetsInitializer.committed_offsets(KafkaOffsetResetStrategy.EARLIEST)))
+               .set_starting_offsets(_committed_or_earliest()))
     # Java KafkaRecordDeserializationSchema bundled in the image (flink/connectors/):
     # emits JSON with topic/partition/offset and base64 key/value bytes.
     builder._j_builder.setDeserializer(get_gateway().jvm.com.lubaba.flink.SensorRecordEnvelopeSchema())
