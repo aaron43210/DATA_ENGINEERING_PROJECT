@@ -107,8 +107,8 @@ BRONZE_OSM = Dataset(f"s3://{BRONZE_BUCKET}/source=osm")
 BRONZE_WEATHER = Dataset(f"s3://{BRONZE_BUCKET}/source=weather")
 
 # Loaded into PostGIS and past the quality gate: safe for dbt to read.
-POSTGIS_OSM = Dataset("postgres://geoplatform/public/vector_features")
-POSTGIS_BOUNDARIES = Dataset("postgres://geoplatform/public/admin_boundaries")
+POSTGIS_OSM = Dataset("postgres://postgres/geoplatform/public/vector_features")
+POSTGIS_BOUNDARIES = Dataset("postgres://postgres/geoplatform/public/admin_boundaries")
 
 # dbt rebuilt the Gold marts: triggers the Great Expectations checks.
-GOLD_READY = Dataset("postgres://geoplatform/gold_marts")
+GOLD_READY = Dataset("postgres://postgres/geoplatform/public/fct_spatial_climate_mart")
