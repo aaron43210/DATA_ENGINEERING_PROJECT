@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: environmental_conditions
+    description: "Gold data product: clean live weather enriched with Kerala districts"
+    meta:
+      domain: Climate
+      owner: Climate Team
+      data_product_id: weather_data
+      sla_freshness_hours: 2
+    columns:
+      - name: station_id
+        data_tests:
+          - not_null
+      - name: event_time
+        data_tests:
+          - not_null
+      - name: humidity_pct
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+
+  - name: fct_spatial_climate_mart
+    description: "Gold data product: one row per OSM feature with its district, newest scene and nearest weather"
+    meta:
+      domain: Environmental Intelligence
+      owner: Angel Team
+      data_product_id: climate_spatial_mart
+      sla_freshness_hours: 24
+    columns:
+      - name: feature_key
+        description: "OSM type and id, e.g. way/123. OSM ids are unique only per type."
+        data_tests:
+          - unique
+          - not_null
+      - name: cloud_percentage
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
