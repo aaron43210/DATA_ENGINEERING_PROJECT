@@ -22,6 +22,7 @@ async def get_db_pool():
         database=os.getenv("POSTGRES_DB", "geoplatform"),
         user=os.getenv("POSTGRES_USER", "geoplatform"),
         password=os.environ["POSTGRES_PASSWORD"],
+        ssl=os.getenv("POSTGRES_SSLMODE", "prefer"),
         init=init_connection,
     )
 

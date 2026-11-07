@@ -21,7 +21,6 @@ from airflow.datasets import Dataset
 logger = logging.getLogger(__name__)
 
 BRONZE_BUCKET = os.environ.get("BUCKET_BRONZE", "bronze")
-S3_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
 
 
 def require_env(name: str) -> str:
@@ -33,16 +32,12 @@ def require_env(name: str) -> str:
 
 
 def get_s3_client():
-    """boto3 S3 client for MinIO (imported lazily to keep DAG parsing fast)."""
+    """boto3 S3 client configured by the standard AWS SDK env vars
+    (AWS_ENDPOINT_URL_S3 points it at MinIO locally). Imported lazily to keep DAG
+    parsing fast."""
     import boto3
 
-    return boto3.client(
-        "s3",
-        endpoint_url=S3_ENDPOINT,
-        aws_access_key_id=require_env("MINIO_ACCESS_KEY"),
-        aws_secret_access_key=require_env("MINIO_SECRET_KEY"),
-        region_name=os.environ.get("MINIO_REGION", "us-east-1"),
-    )
+    return boto3.client("s3")
 
 
 @contextlib.contextmanager
@@ -56,6 +51,7 @@ def pg_connection(**connect_kwargs):
         dbname=os.environ.get("POSTGRES_DB", "geoplatform"),
         user=os.environ.get("POSTGRES_USER", "geoplatform"),
         password=require_env("POSTGRES_PASSWORD"),
+        sslmode=os.environ.get("POSTGRES_SSLMODE", "prefer"),
         **connect_kwargs,
     )
     try:

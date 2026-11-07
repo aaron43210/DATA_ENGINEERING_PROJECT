@@ -243,9 +243,9 @@ def _insert_sql(table, columns, conflict):
 
 def _jdbc_sink(table, columns, conflict):
     options = (JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
-               .with_url("jdbc:postgresql://%s:%s/%s" % (
+               .with_url("jdbc:postgresql://%s:%s/%s?sslmode=%s" % (
                    os.getenv("POSTGRES_HOST", "postgres"), os.getenv("POSTGRES_PORT", "5432"),
-                   os.getenv("POSTGRES_DB", "geoplatform")))
+                   os.getenv("POSTGRES_DB", "geoplatform"), os.getenv("POSTGRES_SSLMODE", "prefer")))
                .with_driver_name("org.postgresql.Driver")
                .with_user_name(os.getenv("POSTGRES_USER", "geoplatform"))
                .with_password(os.environ["POSTGRES_PASSWORD"])

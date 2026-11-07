@@ -36,6 +36,7 @@ x-flink-env: &flink-env
   POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
   POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+  POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
 
 x-airflow-common: &airflow-common
   build: ./airflow
@@ -44,25 +45,25 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:?set in .env}@postgres:5432/${AIRFLOW_DB_NAME:-airflow}
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set in .env}
-    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-geoplatform_airflow_webserver_secret_2026}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:?set in .env}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__ENABLE_XCOM_PICKLING: "false"
-    # S3 / MinIO Configuration
-    MINIO_ENDPOINT: http://minio:9000
-    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set in .env}
-    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
+    # Object storage: standard AWS SDK variables. MinIO locally; on AWS drop the
+    # endpoint and keys so boto3/PyIceberg use real S3 and the task's IAM role.
+    AWS_ENDPOINT_URL_S3: http://minio:9000
+    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     BUCKET_BRONZE: ${BUCKET_BRONZE:-bronze}
     BUCKET_SILVER: ${BUCKET_SILVER:-silver}
     BUCKET_GOLD: ${BUCKET_GOLD:-gold}
-    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in .env}
-    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in .env}
-    AWS_ENDPOINT_URL: http://minio:9000
     # PostGIS Target DB
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
     POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
     POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
     # Ingestion & Quality Parameters
     OVERPASS_API_URL: ${OVERPASS_API_URL:-https://overpass-api.de/api/interpreter}
     OVERPASS_MIRROR_URLS: ${OVERPASS_MIRROR_URLS:-https://overpass.kumi.systems/api/interpreter}

@@ -259,29 +259,31 @@ def load_table(catalog, s3, bucket: str, table: SilverTable) -> int:
 
 
 def s3_client():
-    """boto3 S3 client for the object store holding Bronze."""
-    return boto3.client(
-        "s3",
-        endpoint_url=env("MINIO_ENDPOINT"),
-        aws_access_key_id=env("MINIO_ACCESS_KEY"),
-        aws_secret_access_key=env("MINIO_SECRET_KEY"),
-        region_name=os.environ.get("MINIO_REGION", "us-east-1"),
-    )
+    """boto3 S3 client from the standard AWS SDK env vars (AWS_ENDPOINT_URL_S3 = MinIO)."""
+    return boto3.client("s3")
+
+
+def s3_properties() -> Dict[str, str]:
+    """PyIceberg FileIO settings from the same AWS SDK env vars.
+
+    Without AWS_ENDPOINT_URL_S3 and keys (on AWS) PyIceberg uses real S3 and the
+    default credential chain, i.e. the IAM role.
+    """
+    props = {"s3.region": os.environ.get("AWS_DEFAULT_REGION", "us-east-1")}
+    endpoint = os.environ.get("AWS_ENDPOINT_URL_S3")
+    if endpoint:
+        props.update({"s3.endpoint": endpoint, "s3.path-style-access": "true"})
+    if os.environ.get("AWS_ACCESS_KEY_ID"):
+        props["s3.access-key-id"] = os.environ["AWS_ACCESS_KEY_ID"]
+        props["s3.secret-access-key"] = env("AWS_SECRET_ACCESS_KEY")
+    return props
 
 
 def silver_catalog():
     """Iceberg REST catalog for the Silver tables, with the Silver namespace present."""
     catalog = load_catalog(
         "geoplatform",
-        **{
-            "type": "rest",
-            "uri": env("ICEBERG_REST_URI"),
-            "s3.endpoint": env("MINIO_ENDPOINT"),
-            "s3.access-key-id": env("MINIO_ACCESS_KEY"),
-            "s3.secret-access-key": env("MINIO_SECRET_KEY"),
-            "s3.region": os.environ.get("MINIO_REGION", "us-east-1"),
-            "s3.path-style-access": "true",
-        },
+        **{"type": "rest", "uri": env("ICEBERG_REST_URI"), **s3_properties()},
     )
     catalog.create_namespace_if_not_exists(NAMESPACE)
     return catalog
