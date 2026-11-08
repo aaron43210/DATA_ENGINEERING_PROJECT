@@ -290,3 +290,31 @@ VALUES
     ('weather_stream_observations', 'latitude', 'location', 'truncate_2dp', 365),
     ('weather_stream_observations', 'longitude', 'location', 'truncate_2dp', 365)
 ON CONFLICT (table_name, field_name) DO NOTHING;
+
+-- ── 5. Auth: User accounts and API key management ─────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.api_users (
+    id          SERIAL PRIMARY KEY,
+    google_sub  TEXT UNIQUE NOT NULL,
+    email       TEXT UNIQUE NOT NULL,
+    name        TEXT,
+    role        TEXT NOT NULL DEFAULT 'reader',
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.api_keys (
+    id              SERIAL PRIMARY KEY,
+    user_id         INT REFERENCES public.api_users(id) ON DELETE CASCADE,
+    key_prefix      TEXT NOT NULL,
+    key_hash        TEXT UNIQUE NOT NULL,
+    name            TEXT,
+    quota_day       INT NOT NULL DEFAULT 500,
+    calls_today     INT NOT NULL DEFAULT 0,
+    quota_reset_at  DATE NOT NULL DEFAULT CURRENT_DATE,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    last_used_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON public.api_keys (key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON public.api_keys (user_id);
