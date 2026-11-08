@@ -26,3 +26,5 @@ minio-source/
 # dbt build output
 dbt/target/
 dbt/logs/
+frontend/dist
+frontend/.env.local

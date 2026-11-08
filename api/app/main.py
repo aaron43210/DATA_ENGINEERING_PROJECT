@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
 from app.db.postgis import get_db_pool
-from app.routers import datasets, imagery, weather, sensors, vector
+from app.routers import datasets, imagery, weather, sensors, vector, auth_router
 
 
 @asynccontextmanager
@@ -50,6 +50,7 @@ app.include_router(imagery.router)
 app.include_router(weather.router)
 app.include_router(sensors.router)
 app.include_router(vector.router)
+app.include_router(auth_router.router)
 
 
 @app.get("/health", tags=["System"])
