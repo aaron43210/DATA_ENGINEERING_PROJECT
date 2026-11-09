@@ -3,9 +3,9 @@
 
 locals {
   ingest_jobs = {
-    # Weather is hourly; OSM and Sentinel-2 change slowly, so once a day.
-    hourly = { schedule = "rate(1 hour)", command = ["python", "ingest.py", "weather"] }
-    daily  = { schedule = "rate(1 day)", command = ["python", "ingest.py", "catalog", "satellite", "osm", "weather"] }
+    # Weather and air quality are hourly; OSM and Sentinel-2 change slowly, so once a day.
+    hourly = { schedule = "rate(1 hour)", command = ["python", "ingest.py", "weather", "air_quality"] }
+    daily  = { schedule = "rate(1 day)", command = ["python", "ingest.py", "catalog", "satellite", "osm", "weather", "air_quality"] }
   }
 }
 

@@ -10,6 +10,7 @@ const PRODUCT_ENDPOINTS = {
   satellite_imagery: '/imagery/',
   iot_sensor_stream: '/sensors/',
   live_weather_stream: '/weather/',
+  live_air_quality: '/air-quality/',
 }
 
 export default function ProductExplorer() {

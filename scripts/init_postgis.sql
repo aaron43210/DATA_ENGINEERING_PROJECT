@@ -142,6 +142,29 @@ CREATE TABLE IF NOT EXISTS public.weather_stream_observations (
     CONSTRAINT uq_weather_stream UNIQUE (station_id, event_time)
 );
 
+-- 4.6b Live Air Quality (OpenWeatherMap Air Pollution API). aqi: 1 Good .. 5 Very Poor.
+CREATE TABLE IF NOT EXISTS public.air_quality_observations (
+    id BIGSERIAL PRIMARY KEY,
+    station_id VARCHAR(100) NOT NULL,
+    city_name VARCHAR(100),
+    event_time TIMESTAMPTZ NOT NULL,
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    geom GEOMETRY(Point, 4326) GENERATED ALWAYS AS (ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)) STORED,
+    aqi SMALLINT NOT NULL CHECK (aqi BETWEEN 1 AND 5),
+    pm2_5 DOUBLE PRECISION,
+    pm10 DOUBLE PRECISION,
+    no2 DOUBLE PRECISION,
+    o3 DOUBLE PRECISION,
+    so2 DOUBLE PRECISION,
+    co DOUBLE PRECISION,
+    nh3 DOUBLE PRECISION,
+    no DOUBLE PRECISION,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_air_quality UNIQUE (station_id, event_time)
+);
+CREATE INDEX IF NOT EXISTS idx_air_quality_time ON public.air_quality_observations (event_time DESC);
+
 -- 4.7 Quality Runs (Airflow & GX Quality Audit Log)
 CREATE TABLE IF NOT EXISTS public.quality_runs (
     id SERIAL PRIMARY KEY,
@@ -278,7 +301,10 @@ VALUES
      '/sensors', 'query { sensors { sensorId value isAnomaly } }'),
     ('live_weather_stream', 'Live Weather Stream Observations', 'Climate', 'Lubaba Team',
      'OpenWeatherMap observations for Kerala stations (weather.live), deduplicated per station with temperature anomaly flags', 1, 95.0,
-     '/weather', 'query { weather { stationId temperatureC } }')
+     '/weather', 'query { weather { stationId temperatureC } }'),
+    ('live_air_quality', 'Live Air Quality Index', 'Climate', 'Lubaba Team',
+     'Hourly OpenWeatherMap air quality for Kerala stations: AQI (1 Good to 5 Very Poor) with PM2.5, PM10, NO2, O3, SO2, CO and NH3 in µg/m³', 1, 95.0,
+     '/air-quality', NULL)
 ON CONFLICT (product_id) DO NOTHING;
 
 -- Seed GDPR registry (location data is PII)

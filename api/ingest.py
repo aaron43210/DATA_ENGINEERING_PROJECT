@@ -3,7 +3,7 @@
 Airflow, Redpanda and Flink run only in the local Docker stack, so AWS runs
 this on a schedule instead (see infra/terraform/ingest.tf).
 
-    python ingest.py catalog satellite osm weather
+    python ingest.py catalog satellite osm weather air_quality
 """
 
 import asyncio
@@ -30,13 +30,20 @@ STATIONS = [
     {"station_id": "WX_QLN", "city_name": "Kollam", "lat": 8.8932, "lon": 76.6141},
 ]
 # Products with a live source in AWS; the rest need the local streaming/dbt stack.
-SHOWCASED = ["satellite_imagery", "osm_vector_product", "live_weather_stream"]
+SHOWCASED = [
+    "satellite_imagery",
+    "osm_vector_product",
+    "live_weather_stream",
+    "live_air_quality",
+]
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
 STAC_URL = "https://earth-search.aws.element84.com/v1/search"
 OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
+OWM_AIR_URL = "https://api.openweathermap.org/data/2.5/air_pollution"
+AIR_COMPONENTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co", "nh3", "no"]
 
 http = requests.Session()
 http.headers["User-Agent"] = "GeospatialDataPlatform/2.0"
@@ -87,6 +94,23 @@ def weather_row(station: dict, d: dict):
     )
 
 
+def air_quality_row(station: dict, d: dict):
+    """OpenWeather air_pollution response -> row, or None when it has no reading."""
+    if not d.get("list"):
+        return None
+    reading = d["list"][0]
+    parts = reading.get("components", {})
+    return (
+        station["station_id"],
+        station["city_name"],
+        datetime.fromtimestamp(reading["dt"], timezone.utc),
+        station["lat"],
+        station["lon"],
+        reading["main"]["aqi"],
+        *(parts.get(c) for c in AIR_COMPONENTS),
+    )
+
+
 def satellite_row(item: dict):
     props = item.get("properties", {})
     if (
@@ -113,20 +137,21 @@ async def catalog(conn) -> int:
     return int(result.split()[-1])
 
 
-async def weather(conn) -> int:
+def owm_fetch(url: str, **params) -> list:
+    """GET one OpenWeather endpoint per station -> [(station, json)]."""
     key = os.environ.get("OPENWEATHER_API_KEY", "")
     if not key or key.startswith("YOUR_"):
         raise IngestError("OPENWEATHER_API_KEY is not set")
-    rows = []
+    out = []
     for station in STATIONS:
         try:
             r = http.get(
-                OWM_URL,
+                url,
                 params={
                     "lat": station["lat"],
                     "lon": station["lon"],
                     "appid": key,
-                    "units": "metric",
+                    **params,
                 },
                 timeout=15,
             )
@@ -139,7 +164,12 @@ async def weather(conn) -> int:
             raise IngestError(
                 f"OpenWeather HTTP {r.status_code} for {station['station_id']}"
             )
-        rows.append(weather_row(station, r.json()))
+        out.append((station, r.json()))
+    return out
+
+
+async def weather(conn) -> int:
+    rows = [weather_row(s, d) for s, d in owm_fetch(OWM_URL, units="metric")]
     await conn.executemany(
         """INSERT INTO weather_stream_observations
                (station_id, city_name, event_time, latitude, longitude, temperature_c,
@@ -210,7 +240,26 @@ out geom tags;"""
     return len(rows)
 
 
-JOBS = {"catalog": catalog, "satellite": satellite, "osm": osm, "weather": weather}
+async def air_quality(conn) -> int:
+    rows = [r for r in (air_quality_row(s, d) for s, d in owm_fetch(OWM_AIR_URL)) if r]
+    await conn.executemany(
+        """INSERT INTO air_quality_observations
+               (station_id, city_name, event_time, latitude, longitude, aqi,
+                pm2_5, pm10, no2, o3, so2, co, nh3, no)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           ON CONFLICT (station_id, event_time) DO NOTHING""",
+        rows,
+    )
+    return len(rows)
+
+
+JOBS = {
+    "catalog": catalog,
+    "satellite": satellite,
+    "osm": osm,
+    "weather": weather,
+    "air_quality": air_quality,
+}
 
 
 async def main(names) -> int:

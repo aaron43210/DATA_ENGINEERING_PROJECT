@@ -73,8 +73,9 @@ aws logs tail /ecs/geoplatform-api --log-stream-name-prefix bootstrap --follow
 
 ### 5b. Load data (one-time, then automatic)
 
-`api/ingest.py` pulls OSM (Overpass), Sentinel-2 (Earth Search STAC) and OpenWeather into RDS.
-EventBridge Scheduler runs it automatically: weather every hour, and everything once a day.
+`api/ingest.py` pulls OSM (Overpass), Sentinel-2 (Earth Search STAC), OpenWeather weather and
+OpenWeather air quality (same API key) into RDS.
+EventBridge Scheduler runs it automatically: weather and air quality every hour, and everything once a day.
 To fill the DB right away, start the daily task once:
 
 ```bash
