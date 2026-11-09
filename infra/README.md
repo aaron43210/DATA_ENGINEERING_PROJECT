@@ -57,6 +57,21 @@ aws ecs run-task --cluster geoplatform-cluster --launch-type FARGATE \
 aws logs tail /ecs/geoplatform-api --log-stream-name-prefix bootstrap --follow
 ```
 
+### 5b. Load data (one-time, then automatic)
+
+`api/ingest.py` pulls OSM (Overpass), Sentinel-2 (Earth Search STAC) and OpenWeather into RDS.
+EventBridge Scheduler runs it automatically: weather every hour, and everything once a day.
+To fill the DB right away, start the daily task once:
+
+```bash
+aws ecs run-task --cluster geoplatform-cluster --launch-type FARGATE \
+  --task-definition geoplatform-ingest-daily \
+  --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json public_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw ecs_api_security_group_id)],assignPublicIp=ENABLED}"
+aws logs tail /ecs/geoplatform-api --log-stream-name-prefix ingest --follow
+```
+
+The `catalog` step publishes only the products that AWS has a live source for. These are satellite imagery, OSM vectors and the live weather stream.
+
 ### Tear down
 
 `deletion_protection` is on for RDS. To destroy everything, set it to `false`, then run `terraform apply` and `terraform destroy`.

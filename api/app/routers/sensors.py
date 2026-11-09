@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from typing import Optional, List
 from pydantic import BaseModel
 from app.db.postgis import get_db
-from app.auth import verify_access, mask_pii
+from app.auth import require_scope, mask_pii
 
 router = APIRouter(prefix="/sensors", tags=["IoT Sensors"])
 
@@ -30,8 +30,9 @@ async def get_sensors(
     ),
     anomalies_only: bool = Query(default=False),
     limit: int = Query(default=100, le=1000),
+    offset: int = Query(default=0, ge=0),
     db=Depends(get_db),
-    user_info: dict = Depends(verify_access),
+    user_info: dict = Depends(require_scope("iot_sensor_stream")),
 ):
     """Real-time IoT sensor observations with ambient weather join and anomaly flags."""
     conditions = ["1=1"]
@@ -46,7 +47,7 @@ async def get_sensors(
     if anomalies_only:
         conditions.append("is_anomaly = TRUE")
 
-    args.append(limit)
+    args.extend([limit, offset])
     where = " AND ".join(conditions)
     query = f"""
         SELECT sensor_id, event_time::text, measurement_type, value, unit,
@@ -55,7 +56,7 @@ async def get_sensors(
                latitude, longitude
         FROM sensor_observations
         WHERE {where}
-        ORDER BY event_time DESC LIMIT ${len(args)}
+        ORDER BY event_time DESC LIMIT ${len(args) - 1} OFFSET ${len(args)}
     """
     records = await db.fetch(query, *args)
     results = []
