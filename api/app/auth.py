@@ -9,10 +9,11 @@ import jwt
 logger = logging.getLogger(__name__)
 
 JWT_SECRET = os.environ.get("JWT_SECRET")
-# Deprecated single-key escape hatch — kept for the transition period only.
-# New consumers must use per-user DB-issued keys (POST /keys).
-API_KEY = os.environ.get("API_KEY")
 ALGORITHM = "HS256"
+JWT_ISSUER = "geoplatform-api"
+JWT_AUDIENCE = "geoplatform-web"
+SESSION_COOKIE = "gp_session"
+SESSION_HOURS = 12
 
 if not JWT_SECRET:
     raise RuntimeError(
@@ -46,48 +47,68 @@ def mask_pii(data: dict, table: str, is_privileged: bool = False) -> dict:
     return data
 
 
+def decode_session(token: str) -> dict:
+    """Validate a platform JWT (signature, exp, issuer, audience)."""
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[ALGORITHM],
+            audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER,
+            options={"require": ["exp", "sub", "iss", "aud"]},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    role = payload.get("role", "reader")
+    return {
+        "user": payload["sub"],
+        "role": role,
+        "privileged": role == "admin",
+        "scope": "all",
+    }
+
+
 async def _verify_db_api_key(api_key: str, request: Request) -> dict:
-    """Look up a presented API key in the DB; enforce quota; update usage stats."""
+    """Look up a presented API key and count the call, atomically, in one statement."""
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
     pool = request.app.state.pool
     async with pool.acquire() as db:
+        # Only succeeds for an active, unexpired key that still has quota today, so
+        # concurrent requests cannot overshoot the daily quota.
         row = await db.fetchrow(
             """
-            SELECT k.id, k.user_id, k.is_active, k.quota_day,
-                   k.calls_today, k.quota_reset_at, k.scope,
-                   k.expires_at IS NOT NULL AND k.expires_at <= now() AS expired,
-                   u.email, u.role
-            FROM api_keys k
-            JOIN api_users u ON u.id = k.user_id
-            WHERE k.key_hash = $1
+            UPDATE api_keys k SET
+                calls_today = CASE WHEN k.quota_reset_at < CURRENT_DATE THEN 1
+                                   ELSE k.calls_today + 1 END,
+                quota_reset_at = CURRENT_DATE,
+                last_used_at = now()
+            FROM api_users u
+            WHERE k.key_hash = $1 AND u.id = k.user_id AND k.is_active
+              AND (k.expires_at IS NULL OR k.expires_at > now())
+              AND (k.quota_reset_at < CURRENT_DATE OR k.calls_today < k.quota_day)
+            RETURNING k.scope, u.email, u.role
             """,
             key_hash,
         )
-        if not row or not row["is_active"]:
-            raise HTTPException(status_code=401, detail="Invalid or inactive API key")
-        if row["expired"]:
-            raise HTTPException(status_code=401, detail="API key expired")
-
-        from datetime import date
-
-        today = date.today()
-        calls = row["calls_today"]
-        if row["quota_reset_at"] < today:
-            calls = 0
-            await db.execute(
-                "UPDATE api_keys SET calls_today=0, quota_reset_at=$1 WHERE id=$2",
-                today,
-                row["id"],
+        if row is None:
+            status = await db.fetchrow(
+                """
+                SELECT is_active,
+                       expires_at IS NOT NULL AND expires_at <= now() AS expired
+                FROM api_keys WHERE key_hash = $1
+                """,
+                key_hash,
             )
-
-        if calls >= row["quota_day"]:
+            if not status or not status["is_active"]:
+                raise HTTPException(
+                    status_code=401, detail="Invalid or inactive API key"
+                )
+            if status["expired"]:
+                raise HTTPException(status_code=401, detail="API key expired")
             raise HTTPException(status_code=429, detail="Daily quota exceeded")
-
-        await db.execute(
-            "UPDATE api_keys SET calls_today=$1, last_used_at=now() WHERE id=$2",
-            calls + 1,
-            row["id"],
-        )
 
     return {
         "user": row["email"],
@@ -97,46 +118,41 @@ async def _verify_db_api_key(api_key: str, request: Request) -> dict:
     }
 
 
+def _session_token(request: Request, credentials) -> str | None:
+    if credentials:
+        return credentials.credentials
+    return request.cookies.get(SESSION_COOKIE)
+
+
 async def verify_access(
     request: Request,
     api_key: str = Security(api_key_header),
     credentials: HTTPAuthorizationCredentials = Security(bearer_scheme),
 ) -> dict:
-    """Accept API key (DB-issued) or JWT Bearer token."""
-    # API Key path
+    """Accept a DB-issued API key, or a web session (cookie or Bearer JWT)."""
     if api_key:
-        # Deprecated single env-var key kept as admin escape hatch.
-        if API_KEY and api_key == API_KEY:
-            logger.warning(
-                "Request authenticated with deprecated API_KEY env var. "
-                "Migrate to per-user DB keys."
-            )
-            return {"user": "api-key-user", "role": "admin", "privileged": True}
-        # Normal path: DB lookup with quota enforcement.
         return await _verify_db_api_key(api_key, request)
-
-    # JWT Bearer path
-    if credentials:
-        try:
-            payload = jwt.decode(
-                credentials.credentials, JWT_SECRET, algorithms=[ALGORITHM]
-            )
-            return {
-                "user": payload["sub"],
-                "role": payload.get("role", "reader"),
-                "privileged": payload.get("role") == "admin",
-            }
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
+    token = _session_token(request, credentials)
+    if token:
+        return decode_session(token)
     raise HTTPException(status_code=401, detail="No authentication provided")
+
+
+async def require_session(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme),
+) -> dict:
+    """Signed-in web users only. API keys cannot manage keys, so a scoped or
+    leaked key can never mint a broader or longer-lived one."""
+    token = _session_token(request, credentials)
+    if not token:
+        raise HTTPException(status_code=401, detail="Sign in to manage API keys")
+    return decode_session(token)
 
 
 def require_scope(product: str):
     """Dependency: like verify_access, but the API key must cover `product`.
-    Web sessions (JWT) and the legacy env key have no scope and see everything."""
+    Web sessions have no scope and see everything."""
 
     async def check(user: dict = Depends(verify_access)) -> dict:
         scope = user.get("scope", "all")

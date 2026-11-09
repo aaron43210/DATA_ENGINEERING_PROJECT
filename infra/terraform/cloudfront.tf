@@ -10,6 +10,10 @@ resource "aws_cloudfront_distribution" "spa" {
   origin {
     domain_name = aws_lb.api.dns_name
     origin_id   = "api-alb"
+    custom_header {
+      name  = "X-Origin-Verify"
+      value = var.origin_verify_secret
+    }
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -28,9 +32,10 @@ resource "aws_cloudfront_distribution" "spa" {
       query_string = false
       cookies { forward = "none" }
     }
-    min_ttl     = 0
-    default_ttl = 86400
-    max_ttl     = 31536000
+    min_ttl                    = 0
+    default_ttl                = 86400
+    max_ttl                    = 31536000
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.spa.id
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.spa_rewrite.arn
@@ -47,11 +52,15 @@ resource "aws_cloudfront_distribution" "spa" {
     forwarded_values {
       query_string = true
       headers      = ["Authorization", "X-API-Key", "Content-Type", "Host"]
-      cookies { forward = "none" }
+      cookies {
+        forward           = "whitelist"
+        whitelisted_names = ["gp_session"]
+      }
     }
-    min_ttl     = 0
-    default_ttl = 0
-    max_ttl     = 0
+    min_ttl                    = 0
+    default_ttl                = 0
+    max_ttl                    = 0
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.api.id
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.strip_api_prefix.arn
@@ -83,6 +92,10 @@ resource "aws_cloudfront_function" "strip_api_prefix" {
     function handler(event) {
       var req = event.request;
       req.uri = req.uri.replace(/^\/api/, "") || "/";
+      // Prometheus metrics are for internal scraping only.
+      if (req.uri === "/metrics" || req.uri.indexOf("/metrics/") === 0) {
+        return { statusCode: 404, statusDescription: "Not Found" };
+      }
       return req;
     }
   JS
@@ -103,4 +116,63 @@ resource "aws_cloudfront_function" "spa_rewrite" {
       return req;
     }
   JS
+}
+
+# Browser hardening for the SPA. CSP lists exactly what the app loads: Google sign-in,
+# OSM tiles, Earth Search STAC metadata and Sentinel-2 thumbnails on S3.
+resource "aws_cloudfront_response_headers_policy" "spa" {
+  name = "${var.app_name}-spa-security"
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      override                   = true
+    }
+    content_type_options { override = true }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+    content_security_policy {
+      override = true
+      content_security_policy = join("; ", [
+        "default-src 'self'",
+        "script-src 'self' https://accounts.google.com/gsi/client",
+        "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
+        "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.amazonaws.com https://*.googleusercontent.com",
+        "connect-src 'self' https://accounts.google.com/gsi/ https://tile.openstreetmap.org https://earth-search.aws.element84.com",
+        "frame-src https://accounts.google.com/gsi/",
+        "worker-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+      ])
+    }
+  }
+}
+
+# API responses: same transport headers, no CSP (Swagger UI at /api/docs loads from a CDN).
+resource "aws_cloudfront_response_headers_policy" "api" {
+  name = "${var.app_name}-api-security"
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      override                   = true
+    }
+    content_type_options { override = true }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "no-referrer"
+      override        = true
+    }
+  }
 }

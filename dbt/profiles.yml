@@ -11,7 +11,7 @@ geoplatform:
       schema: public
       threads: 4
       keepalives_idle: 0
-      sslmode: "{{ env_var('POSTGRES_SSLMODE', 'prefer') }}"
+      sslmode: "{{ env_var('POSTGRES_SSLMODE', 'require') }}"
     prod:
       type: postgres
       host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
@@ -22,4 +22,4 @@ geoplatform:
       schema: public
       threads: 8
       keepalives_idle: 0
-      sslmode: "{{ env_var('POSTGRES_SSLMODE', 'prefer') }}"
+      sslmode: "{{ env_var('POSTGRES_SSLMODE', 'require') }}"

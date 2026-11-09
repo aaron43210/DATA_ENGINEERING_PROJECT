@@ -32,21 +32,27 @@ jobs:
       CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
       SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SHA }}
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       - name: Build and push API image
         run: |
-          docker build -t "$ECR_API_URL:$SHA" -t "$ECR_API_URL:latest" ./api
-          docker push "$ECR_API_URL:$SHA"
+          # SHA tags are immutable in ECR, so a re-run of the same commit reuses its image.
+          if aws ecr describe-images --repository-name "${ECR_API_URL#*/}" --image-ids imageTag="$SHA" >/dev/null 2>&1; then
+            docker pull "$ECR_API_URL:$SHA"
+            docker tag "$ECR_API_URL:$SHA" "$ECR_API_URL:latest"
+          else
+            docker build -t "$ECR_API_URL:$SHA" -t "$ECR_API_URL:latest" ./api
+            docker push "$ECR_API_URL:$SHA"
+          fi
           docker push "$ECR_API_URL:latest"
 
       - name: Roll out API on ECS
@@ -54,7 +60,7 @@ jobs:
           aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_API_SERVICE" --force-new-deployment >/dev/null
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_API_SERVICE"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
@@ -73,6 +79,9 @@ jobs:
           # Hashed assets cache forever; index.html must always revalidate.
           aws s3 sync frontend/dist/ "s3://$SPA_BUCKET/" --delete --exclude index.html \
             --cache-control "public,max-age=31536000,immutable"
+          # Module workers (MapLibre) are refused unless served as JavaScript.
+          aws s3 cp frontend/dist/assets/ "s3://$SPA_BUCKET/assets/" --recursive --exclude "*" --include "*.mjs" \
+            --content-type "text/javascript" --cache-control "public,max-age=31536000,immutable"
           aws s3 cp frontend/dist/index.html "s3://$SPA_BUCKET/index.html" \
             --cache-control "no-cache"
           aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/index.html" >/dev/null

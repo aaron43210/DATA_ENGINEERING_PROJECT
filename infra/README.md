@@ -11,7 +11,12 @@
 ### 1. Create Terraform state bucket (once)
 
 ```bash
-aws s3 mb s3://geoplatform-tf-state-<ACCOUNT_ID> --region us-east-1  # match backend.tf
+B=geoplatform-tf-state-<ACCOUNT_ID>   # match backend.tf
+aws s3 mb s3://$B --region us-east-1
+# State holds every secret in plaintext: keep history and refuse plain HTTP.
+aws s3api put-bucket-versioning --bucket $B --versioning-configuration Status=Enabled
+aws s3api put-public-access-block --bucket $B --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-policy --bucket $B --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"DenyInsecureTransport\",\"Effect\":\"Deny\",\"Principal\":\"*\",\"Action\":\"s3:*\",\"Resource\":[\"arn:aws:s3:::$B\",\"arn:aws:s3:::$B/*\"],\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}}}]}"
 ```
 
 ### 2. Create `prod.tfvars`
@@ -21,10 +26,14 @@ postgres_password   = "..."
 airflow_fernet_key  = "..."
 airflow_secret_key  = "..."
 jwt_secret          = "..."
-api_key             = "..."
 google_client_id    = "..."
 openweather_api_key = "..."
+origin_verify_secret = "..."   # python3 -c 'import secrets;print(secrets.token_urlsafe(32))'
+budget_alert_email   = "you@example.com"
+monthly_budget_usd   = 50
 ```
+
+`prod.tfvars` is gitignored. Never commit it.
 
 ### 3. Apply Terraform
 
@@ -32,8 +41,13 @@ openweather_api_key = "..."
 cd infra/terraform
 terraform init
 terraform plan -var-file=prod.tfvars
+# First time only: create CloudFront (it sends X-Origin-Verify) before the ALB starts requiring it.
+terraform apply -var-file=prod.tfvars -target=aws_cloudfront_distribution.spa
 terraform apply -var-file=prod.tfvars
 ```
+
+The ALB answers 403 to anything without CloudFront's `X-Origin-Verify` header, so the WAF cannot be bypassed.
+The API database connection uses `sslmode=verify-full` with the RDS CA bundle baked into the API image.
 
 ### 4. Push images to ECR
 
@@ -80,8 +94,10 @@ A final snapshot named `geoplatform-final` is kept. Delete it in the RDS console
 ### 6. Deploy SPA
 
 ```bash
-cd frontend && npm run build
-aws s3 sync dist/ s3://geoplatform-spa/ --delete
+cd frontend && VITE_GOOGLE_CLIENT_ID=<client id> npm run build
+aws s3 sync dist/ s3://geoplatform-spa/ --delete --exclude "*.mjs"
+# MapLibre's module worker is refused unless served as JavaScript
+aws s3 cp dist/assets/ s3://geoplatform-spa/assets/ --recursive --exclude "*" --include "*.mjs" --content-type text/javascript
 aws cloudfront create-invalidation --distribution-id <id> --paths "/*"
 ```
 

@@ -4,7 +4,6 @@ locals {
     airflow_fernet_key  = var.airflow_fernet_key
     airflow_secret_key  = var.airflow_secret_key
     jwt_secret          = var.jwt_secret
-    api_key             = var.api_key
     openweather_api_key = var.openweather_api_key
   }
 }

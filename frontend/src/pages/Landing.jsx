@@ -10,7 +10,7 @@ export default function Landing() {
   async function handleSuccess(response) {
     try {
       const data = await api.post('/auth/google', { credential: response.credential })
-      login(data.token, data.user)
+      login(data.user)
       navigate('/dashboard')
     } catch (err) {
       alert('Sign-in failed: ' + err.message)

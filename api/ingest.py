@@ -18,7 +18,12 @@ from app.db.postgis import get_db_pool
 # west, south, east, north — same Kerala box as the Airflow DAGs
 BBOX = (74.8, 8.1, 77.5, 12.8)
 STATIONS = [
-    {"station_id": "WX_TVM", "city_name": "Thiruvananthapuram", "lat": 8.5241, "lon": 76.9366},
+    {
+        "station_id": "WX_TVM",
+        "city_name": "Thiruvananthapuram",
+        "lat": 8.5241,
+        "lon": 76.9366,
+    },
     {"station_id": "WX_COK", "city_name": "Kochi", "lat": 9.9312, "lon": 76.2673},
     {"station_id": "WX_CCJ", "city_name": "Kozhikode", "lat": 11.2588, "lon": 75.7804},
     {"station_id": "WX_TCR", "city_name": "Thrissur", "lat": 10.5276, "lon": 76.2144},
@@ -26,7 +31,10 @@ STATIONS = [
 ]
 # Products with a live source in AWS; the rest need the local streaming/dbt stack.
 SHOWCASED = ["satellite_imagery", "osm_vector_product", "live_weather_stream"]
-OVERPASS_URLS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
 STAC_URL = "https://earth-search.aws.element84.com/v1/search"
 OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
 
@@ -65,23 +73,34 @@ def osm_row(el: dict):
 
 def weather_row(station: dict, d: dict):
     return (
-        station["station_id"], station["city_name"],
+        station["station_id"],
+        station["city_name"],
         datetime.fromtimestamp(d["dt"], timezone.utc),
-        station["lat"], station["lon"],
-        d["main"].get("temp"), d["main"].get("humidity"),
-        d.get("wind", {}).get("speed"), d.get("clouds", {}).get("all"),
-        d.get("rain", {}).get("1h", 0.0), d["weather"][0]["main"] if d.get("weather") else None,
+        station["lat"],
+        station["lon"],
+        d["main"].get("temp"),
+        d["main"].get("humidity"),
+        d.get("wind", {}).get("speed"),
+        d.get("clouds", {}).get("all"),
+        d.get("rain", {}).get("1h", 0.0),
+        d["weather"][0]["main"] if d.get("weather") else None,
     )
 
 
 def satellite_row(item: dict):
     props = item.get("properties", {})
-    if props.get("eo:cloud_cover") is None or not props.get("datetime") or len(item.get("bbox", [])) != 4:
+    if (
+        props.get("eo:cloud_cover") is None
+        or not props.get("datetime")
+        or len(item.get("bbox", [])) != 4
+    ):
         return None
     return (
-        item["id"], props.get("platform", "sentinel-2"),
+        item["id"],
+        props.get("platform", "sentinel-2"),
         datetime.fromisoformat(props["datetime"].replace("Z", "+00:00")),
-        float(props["eo:cloud_cover"]), *item["bbox"],
+        float(props["eo:cloud_cover"]),
+        *item["bbox"],
     )
 
 
@@ -101,13 +120,25 @@ async def weather(conn) -> int:
     rows = []
     for station in STATIONS:
         try:
-            r = http.get(OWM_URL, params={"lat": station["lat"], "lon": station["lon"],
-                                          "appid": key, "units": "metric"}, timeout=15)
+            r = http.get(
+                OWM_URL,
+                params={
+                    "lat": station["lat"],
+                    "lon": station["lon"],
+                    "appid": key,
+                    "units": "metric",
+                },
+                timeout=15,
+            )
         except requests.RequestException as exc:
             # requests' messages include the URL, which carries the appid.
-            raise IngestError(f"OpenWeather unreachable ({type(exc).__name__})") from None
+            raise IngestError(
+                f"OpenWeather unreachable ({type(exc).__name__})"
+            ) from None
         if r.status_code != 200:
-            raise IngestError(f"OpenWeather HTTP {r.status_code} for {station['station_id']}")
+            raise IngestError(
+                f"OpenWeather HTTP {r.status_code} for {station['station_id']}"
+            )
         rows.append(weather_row(station, r.json()))
     await conn.executemany(
         """INSERT INTO weather_stream_observations
@@ -124,10 +155,16 @@ async def weather(conn) -> int:
 async def satellite(conn) -> int:
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=30)
-    r = http.post(STAC_URL, json={
-        "collections": ["sentinel-2-c1-l2a"], "bbox": list(BBOX),
-        "datetime": f"{start:%Y-%m-%dT%H:%M:%SZ}/{end:%Y-%m-%dT%H:%M:%SZ}", "limit": 100,
-    }, timeout=60)
+    r = http.post(
+        STAC_URL,
+        json={
+            "collections": ["sentinel-2-c1-l2a"],
+            "bbox": list(BBOX),
+            "datetime": f"{start:%Y-%m-%dT%H:%M:%SZ}/{end:%Y-%m-%dT%H:%M:%SZ}",
+            "limit": 100,
+        },
+        timeout=60,
+    )
     r.raise_for_status()
     rows = [row for row in map(satellite_row, r.json().get("features", [])) if row]
     await conn.executemany(
@@ -155,7 +192,10 @@ out geom tags;"""
             elements = r.json().get("elements", [])
             break
         except (requests.RequestException, ValueError) as exc:
-            print(f"osm: {url} failed ({type(exc).__name__}), trying next mirror", flush=True)
+            print(
+                f"osm: {url} failed ({type(exc).__name__}), trying next mirror",
+                flush=True,
+            )
     if elements is None:
         raise IngestError("all Overpass mirrors failed")
     rows = [row for row in map(osm_row, elements) if row]

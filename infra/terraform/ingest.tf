@@ -26,7 +26,8 @@ resource "aws_ecs_task_definition" "ingest" {
       { name = "POSTGRES_HOST", value = aws_db_instance.postgres.address },
       { name = "POSTGRES_DB", value = "geoplatform" },
       { name = "POSTGRES_USER", value = "geoplatform" },
-      { name = "POSTGRES_SSLMODE", value = "require" },
+      { name = "POSTGRES_SSLMODE", value = "verify-full" },
+      { name = "POSTGRES_SSLROOTCERT", value = "/etc/ssl/rds-global-bundle.pem" },
     ]
     secrets = [
       { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.platform["postgres_password"].arn },

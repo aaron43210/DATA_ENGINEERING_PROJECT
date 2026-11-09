@@ -1,11 +1,11 @@
-import os
-
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.postgis import get_db
 
-API_KEY = os.environ["API_KEY"]
+from app.routers.auth_router import _make_jwt
+
+SESSION = {"Authorization": f"Bearer {_make_jwt(1, 'reader@example.com', 'reader')}"}
 
 
 # Fake database connection for testing
@@ -38,14 +38,14 @@ def test_datasets_unauthorized():
 
 
 def test_datasets_authorized():
-    response = client.get("/datasets/", headers={"X-API-Key": API_KEY})
+    response = client.get("/datasets/", headers=SESSION)
 
     assert response.status_code == 200
     assert response.json() == []
 
 
 def test_only_rest_routes_exposed():
-    paths = {r.path for r in app.routes}
+    paths = set(app.openapi()["paths"])
     assert "/graphql" not in paths
     assert not any(p.startswith("/lineage") for p in paths)
     assert {
@@ -78,9 +78,72 @@ def test_datasets_catalog_allows_product_without_rest_port():
 
     app.dependency_overrides[get_db] = row_db
     try:
-        response = client.get("/datasets/", headers={"X-API-Key": API_KEY})
+        response = client.get("/datasets/", headers=SESSION)
     finally:
         app.dependency_overrides[get_db] = override_get_db
 
     assert response.status_code == 200
     assert response.json() == [row]
+
+
+def test_legacy_shared_api_key_is_gone(monkeypatch):
+    monkeypatch.setenv("API_KEY", "old-shared-key")
+
+    class NoKeyPool:
+        def acquire(self):
+            class Ctx:
+                async def __aenter__(self_inner):
+                    class DB:
+                        async def fetchrow(self, *a):
+                            return None
+
+                    return DB()
+
+                async def __aexit__(self_inner, *a):
+                    return False
+
+            return Ctx()
+
+    app.state.pool = NoKeyPool()
+    assert (
+        client.get("/datasets/", headers={"X-API-Key": "old-shared-key"}).status_code
+        == 401
+    )
+
+
+def test_session_cookie_is_accepted():
+    client.cookies.set("gp_session", SESSION["Authorization"].split()[1])
+    try:
+        assert client.get("/datasets/").status_code == 200
+    finally:
+        client.cookies.clear()
+
+
+def test_token_without_audience_is_rejected():
+    import jwt
+    from datetime import datetime, timedelta, timezone
+    from app.auth import JWT_SECRET
+
+    bare = jwt.encode(
+        {"sub": "x@y.z", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+        JWT_SECRET,
+        algorithm="HS256",
+    )
+    assert (
+        client.get(
+            "/datasets/", headers={"Authorization": f"Bearer {bare}"}
+        ).status_code
+        == 401
+    )
+
+
+def test_trailing_slash_served_without_redirect():
+    r = client.get("/datasets", headers=SESSION, follow_redirects=False)
+    assert r.status_code == 200
+
+
+def test_metrics_label_by_route_not_raw_path():
+    client.get("/no-such-path-12345")
+    body = client.get("/metrics/").text
+    assert "no-such-path-12345" not in body
+    assert 'path="unmatched"' in body
