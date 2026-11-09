@@ -70,6 +70,7 @@ resource "aws_cloudfront_distribution" "spa" {
   web_acl_id          = aws_wafv2_web_acl.api_rate_limit.arn
   enabled             = true
   is_ipv6_enabled     = true
+  aliases             = var.acm_cert_arn != "" ? ["geoplatformkerala.tech"] : []
   default_root_object = "index.html"
 
   restrictions {
@@ -77,7 +78,10 @@ resource "aws_cloudfront_distribution" "spa" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = var.acm_cert_arn == ""
+    acm_certificate_arn            = var.acm_cert_arn != "" ? var.acm_cert_arn : null
+    ssl_support_method             = var.acm_cert_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.acm_cert_arn != "" ? "TLSv1.2_2021" : null
   }
 
   tags = { Name = "${var.app_name}-cloudfront" }
