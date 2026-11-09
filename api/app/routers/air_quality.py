@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from typing import List, Optional
 from pydantic import BaseModel
@@ -31,6 +32,12 @@ async def get_air_quality(
     latest: bool = Query(
         default=False, description="Only the newest reading per station"
     ),
+    from_time: Optional[datetime] = Query(
+        default=None, description="ISO 8601, inclusive, e.g. 2026-11-09T00:00:00Z"
+    ),
+    to_time: Optional[datetime] = Query(
+        default=None, description="ISO 8601, inclusive"
+    ),
     limit: int = Query(default=100, le=1000),
     offset: int = Query(default=0, ge=0),
     db=Depends(get_db),
@@ -44,11 +51,15 @@ async def get_air_quality(
                (ARRAY['Good','Fair','Moderate','Poor','Very Poor'])[aqi] AS aqi_label,
                pm2_5, pm10, no2, o3, so2, co, nh3, no, latitude, longitude
         FROM air_quality_observations
-        WHERE $1::text IS NULL OR station_id = $1
+        WHERE ($1::text IS NULL OR station_id = $1)
+          AND ($2::timestamptz IS NULL OR event_time >= $2)
+          AND ($3::timestamptz IS NULL OR event_time <= $3)
         ORDER BY {"station_id, " if latest else ""}event_time DESC
-        LIMIT $2 OFFSET $3
+        LIMIT $4 OFFSET $5
         """,
         station_id,
+        from_time,
+        to_time,
         limit,
         offset,
     )
