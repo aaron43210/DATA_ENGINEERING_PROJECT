@@ -5,7 +5,7 @@ const PAGING = [
 ]
 
 const WEATHER = {
-  title: 'Live Weather Stream',
+  title: 'Live Weather Stream Observations',
   endpoint: '/weather/',
   scope: 'live_weather_stream',
   dateField: 'event_time',
@@ -37,7 +37,7 @@ const WEATHER = {
 
 export const PRODUCTS = {
   satellite_imagery: {
-    title: 'Satellite Imagery',
+    title: 'Satellite Imagery Observations',
     endpoint: '/imagery/',
     scope: 'satellite_imagery',
     dateField: 'acquisition_time',
@@ -59,7 +59,7 @@ export const PRODUCTS = {
     },
   },
   osm_vector_product: {
-    title: 'OSM Vector Infrastructure',
+    title: 'Kerala Critical Vector Infrastructure',
     endpoint: '/vector/features',
     scope: 'osm_vector_product',
     summary: 'OpenStreetMap hospitals, clinics, ambulance stations and trunk roads in Kerala.',
@@ -80,9 +80,8 @@ export const PRODUCTS = {
     },
   },
   live_weather_stream: WEATHER,
-  weather_data: WEATHER,
   live_air_quality: {
-    title: 'Live Air Quality',
+    title: 'Live Air Quality Index',
     endpoint: '/air-quality/',
     scope: 'live_air_quality',
     dateField: 'event_time',
@@ -113,36 +112,6 @@ export const PRODUCTS = {
       no: 'NO, µg/m³',
       latitude: 'Latitude',
       longitude: 'Longitude',
-    },
-  },
-  iot_sensor_stream: {
-    title: 'IoT Sensor Stream',
-    endpoint: '/sensors/',
-    scope: 'all',
-    dateField: 'event_time',
-    dateLabel: 'Measured at',
-    summary: 'Validated MQTT sensor readings with rolling averages, anomaly flags and nearest-station ambient temperature.',
-    params: [
-      { name: 'sensor_id', type: 'string', desc: 'One sensor' },
-      { name: 'measurement_type', type: 'string', desc: 'temperature, humidity, soil_moisture, air_quality' },
-      { name: 'anomalies_only', type: 'boolean', default: 'false', desc: 'Only readings flagged as anomalies' },
-      { name: 'limit', type: 'integer', default: '100', desc: 'Rows per page, max 1000' },
-      ...PAGING,
-    ],
-    example: '?measurement_type=temperature&limit=10',
-    fields: {
-      sensor_id: 'Sensor ID',
-      event_time: 'Measurement time (UTC)',
-      measurement_type: 'What was measured',
-      value: 'Reading',
-      unit: 'Unit of the reading',
-      quality_flag: 'Validation result',
-      window_avg: 'Rolling average over the stream window',
-      is_anomaly: 'Z-score anomaly flag',
-      nearest_weather_station: 'Closest weather station',
-      ambient_temperature_c: 'Temperature at that station, °C',
-      latitude: 'Latitude (2 dp for non-admin users)',
-      longitude: 'Longitude (2 dp for non-admin users)',
     },
   },
 }

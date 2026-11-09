@@ -76,7 +76,7 @@ export default function SceneMetadata() {
   return (
     <div className="min-h-full bg-white text-gray-900 px-4 sm:px-6 py-6 sm:py-10">
       <div className="max-w-5xl mx-auto">
-        <Link to="/explore/satellite_imagery" className="text-gray-600 hover:text-gray-900 text-sm">← Satellite Imagery</Link>
+        <Link to="/explore/satellite_imagery" className="text-gray-600 hover:text-gray-900 text-sm">← Satellite Imagery Observations</Link>
         <h2 className="text-xl sm:text-2xl font-bold mt-2 break-all">{sceneId}</h2>
         <p className="text-sm text-gray-600 mt-1 mb-6">Sentinel-2 Level-2A scene metadata from the Earth Search STAC catalogue.</p>
 
