@@ -8,8 +8,8 @@ terraform {
   }
   backend "s3" {
     # Create this bucket manually before `terraform init`:
-    # aws s3 mb s3://geoplatform-tf-state --region us-east-1
-    bucket  = "geoplatform-tf-state"
+    # aws s3 mb s3://geoplatform-tf-state-327936093000 --region us-east-1
+    bucket  = "geoplatform-tf-state-327936093000"
     key     = "platform/terraform.tfstate"
     region  = "us-east-1"
     encrypt = true

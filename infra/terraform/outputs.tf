@@ -1,6 +1,14 @@
 output "api_url" {
-  description = "ALB DNS name (API)"
-  value       = "https://${aws_lb.api.dns_name}"
+  description = "Public API base URL (CloudFront; the ALB only accepts CloudFront traffic)"
+  value       = "https://${aws_cloudfront_distribution.spa.domain_name}/api"
+}
+
+output "public_subnet_ids" {
+  value = aws_subnet.public[*].id
+}
+
+output "ecs_api_security_group_id" {
+  value = aws_security_group.ecs_api.id
 }
 
 output "spa_url" {
