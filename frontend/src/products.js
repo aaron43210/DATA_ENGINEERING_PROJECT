@@ -1,0 +1,153 @@
+export const API_BASE_URL = 'https://geoplatformkerala.tech/api'
+
+const PAGING = [
+  { name: 'offset', type: 'integer', default: '0', desc: 'Rows to skip, for paging' },
+]
+
+const WEATHER = {
+  title: 'Live Weather Stream',
+  endpoint: '/weather/',
+  scope: 'live_weather_stream',
+  dateField: 'event_time',
+  dateLabel: 'Observed at',
+  summary: 'OpenWeatherMap observations for 5 Kerala stations (WX_TVM, WX_COK, WX_CCJ, WX_TCR, WX_QLN), newest first.',
+  params: [
+    { name: 'station_id', type: 'string', desc: 'One station, e.g. WX_COK' },
+    { name: 'anomalies_only', type: 'boolean', default: 'false', desc: 'Only readings flagged as temperature anomalies' },
+    { name: 'limit', type: 'integer', default: '100', desc: 'Rows per page, max 1000' },
+    ...PAGING,
+  ],
+  example: '?station_id=WX_COK&limit=10',
+  fields: {
+    station_id: 'Station code',
+    city_name: 'City',
+    event_time: 'Observation time (UTC)',
+    temperature_c: 'Air temperature, °C',
+    humidity_pct: 'Relative humidity, %',
+    wind_speed_ms: 'Wind speed, m/s',
+    cloud_cover_pct: 'Cloud cover, %',
+    rainfall_1h_mm: 'Rain in the last hour, mm',
+    weather_condition: 'Condition text',
+    quality_flag: 'Validation result',
+    is_anomaly: 'Temperature anomaly flag',
+    latitude: 'Latitude (2 dp for non-admin users)',
+    longitude: 'Longitude (2 dp for non-admin users)',
+  },
+}
+
+export const PRODUCTS = {
+  satellite_imagery: {
+    title: 'Satellite Imagery',
+    endpoint: '/imagery/',
+    scope: 'satellite_imagery',
+    dateField: 'acquisition_time',
+    dateLabel: 'Acquired',
+    summary: 'Sentinel-2 L2A scenes over Kerala with cloud cover, quality band and footprint, newest acquisition first.',
+    params: [
+      { name: 'max_cloud_pct', type: 'number', default: '50', desc: 'Only scenes at or below this cloud cover, 0 to 100' },
+      { name: 'limit', type: 'integer', default: '50', desc: 'Rows per page, max 500' },
+      ...PAGING,
+    ],
+    example: '?max_cloud_pct=20&limit=10',
+    fields: {
+      scene_id: 'Sentinel-2 scene ID',
+      satellite: 'Platform (sentinel-2a / 2b / 2c)',
+      acquisition_time: 'When the satellite captured the image (UTC)',
+      cloud_percentage: 'Cloud cover, %',
+      image_quality: 'Excellent < 10% cloud, Good < 30%, else Poor',
+      footprint: 'Scene bounding box as GeoJSON Polygon',
+    },
+  },
+  osm_vector_product: {
+    title: 'OSM Vector Infrastructure',
+    endpoint: '/vector/features',
+    scope: 'osm_vector_product',
+    summary: 'OpenStreetMap hospitals, clinics, ambulance stations and trunk roads in Kerala.',
+    params: [
+      { name: 'feature_type', type: 'string', desc: 'hospital, clinic, doctors, ambulance_station, highway_trunk, highway_primary' },
+      { name: 'limit', type: 'integer', default: '100', desc: 'Rows per page, max 500' },
+      ...PAGING,
+    ],
+    example: '?feature_type=hospital&limit=10',
+    fields: {
+      id: 'Platform row ID',
+      osm_type: 'node, way or relation',
+      osm_id: 'OpenStreetMap ID',
+      feature_type: 'Feature category',
+      name: 'Name from OSM',
+      tags: 'All OSM tags (JSON object)',
+      geometry: 'GeoJSON Point or LineString',
+    },
+  },
+  live_weather_stream: WEATHER,
+  weather_data: WEATHER,
+  live_air_quality: {
+    title: 'Live Air Quality',
+    endpoint: '/air-quality/',
+    scope: 'live_air_quality',
+    dateField: 'event_time',
+    dateLabel: 'Measured at',
+    summary: 'Hourly OpenWeatherMap air quality per Kerala station. AQI 1 Good, 2 Fair, 3 Moderate, 4 Poor, 5 Very Poor.',
+    params: [
+      { name: 'station_id', type: 'string', desc: 'One station, e.g. WX_TVM' },
+      { name: 'latest', type: 'boolean', default: 'false', desc: 'Only the newest reading per station' },
+      { name: 'from_time', type: 'ISO 8601 datetime', desc: 'Readings at or after, e.g. 2026-11-08T00:00:00Z' },
+      { name: 'to_time', type: 'ISO 8601 datetime', desc: 'Readings at or before' },
+      { name: 'limit', type: 'integer', default: '100', desc: 'Rows per page, max 1000' },
+      ...PAGING,
+    ],
+    example: '?latest=true',
+    fields: {
+      station_id: 'Station code',
+      city_name: 'City',
+      event_time: 'Measurement time (UTC)',
+      aqi: 'Air Quality Index, 1 to 5',
+      aqi_label: 'AQI as text',
+      pm2_5: 'PM2.5, µg/m³',
+      pm10: 'PM10, µg/m³',
+      no2: 'NO₂, µg/m³',
+      o3: 'O₃, µg/m³',
+      so2: 'SO₂, µg/m³',
+      co: 'CO, µg/m³',
+      nh3: 'NH₃, µg/m³',
+      no: 'NO, µg/m³',
+      latitude: 'Latitude',
+      longitude: 'Longitude',
+    },
+  },
+  iot_sensor_stream: {
+    title: 'IoT Sensor Stream',
+    endpoint: '/sensors/',
+    scope: 'all',
+    dateField: 'event_time',
+    dateLabel: 'Measured at',
+    summary: 'Validated MQTT sensor readings with rolling averages, anomaly flags and nearest-station ambient temperature.',
+    params: [
+      { name: 'sensor_id', type: 'string', desc: 'One sensor' },
+      { name: 'measurement_type', type: 'string', desc: 'temperature, humidity, soil_moisture, air_quality' },
+      { name: 'anomalies_only', type: 'boolean', default: 'false', desc: 'Only readings flagged as anomalies' },
+      { name: 'limit', type: 'integer', default: '100', desc: 'Rows per page, max 1000' },
+      ...PAGING,
+    ],
+    example: '?measurement_type=temperature&limit=10',
+    fields: {
+      sensor_id: 'Sensor ID',
+      event_time: 'Measurement time (UTC)',
+      measurement_type: 'What was measured',
+      value: 'Reading',
+      unit: 'Unit of the reading',
+      quality_flag: 'Validation result',
+      window_avg: 'Rolling average over the stream window',
+      is_anomaly: 'Z-score anomaly flag',
+      nearest_weather_station: 'Closest weather station',
+      ambient_temperature_c: 'Temperature at that station, °C',
+      latitude: 'Latitude (2 dp for non-admin users)',
+      longitude: 'Longitude (2 dp for non-admin users)',
+    },
+  },
+}
+
+// Postgres text timestamps ("2026-11-06 05:36:11+00") are not ISO; Safari rejects them.
+export const toDate = t => new Date(String(t).replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'))
+
+export const formatDate = t => toDate(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
