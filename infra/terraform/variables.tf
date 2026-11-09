@@ -84,3 +84,25 @@ variable "bootstrap_sql_ref" {
   type        = string
   default     = "main"
 }
+
+variable "pipeline_ssh_cidr" {
+  description = "Your public IP as a /32, the only address allowed to SSH to the pipeline host"
+  type        = string
+}
+
+variable "pipeline_public_key" {
+  description = "SSH public key for the pipeline host, e.g. the contents of ~/.ssh/id_ed25519.pub"
+  type        = string
+}
+
+variable "pipeline_instance_type" {
+  description = "Pipeline host size; 8 GB fits with the lowered Flink memory in .env.aws.example plus swap"
+  type        = string
+  default     = "t3.large"
+}
+
+variable "pipeline_repo_url" {
+  description = "Git repository the pipeline host clones on first boot"
+  type        = string
+  default     = "https://github.com/aaron43210/DATA_ENGINEERING_PROJECT.git"
+}

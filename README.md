@@ -87,6 +87,26 @@ MinIO is built from its official source (`infra/minio/`) because the free images
 Existing database volume? Re-run the idempotent schema:
 `docker compose exec -T postgres psql -U geoplatform -d geoplatform < scripts/init_postgis.sql`
 
+## Pipeline on AWS (one EC2 host)
+
+The API runs on ECS. Airflow + dbt, Redpanda, Flink, the Iceberg REST catalog, Prometheus and Grafana run on one EC2 host (`infra/terraform/pipeline.tf`) with `docker-compose.aws.yml`, which swaps the postgres container for RDS and MinIO for S3. The host's IAM role grants S3 access, so no keys are stored.
+
+1. Add `pipeline_ssh_cidr = "<your IP>/32"` and `pipeline_public_key = "<contents of ~/.ssh/id_ed25519.pub>"` to `prod.tfvars`, then `terraform apply -var-file=prod.tfvars` in `infra/terraform`.
+2. `ssh ubuntu@$(terraform output -raw pipeline_public_ip)`. First boot installs Docker and clones the repo to `~/DE_PROJECT` (wait for `cloud-init status --wait`).
+3. `cd ~/DE_PROJECT && cp .env.aws.example .env && chmod 600 .env`, then fill in every `<...>`.
+4. Start it:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.aws.yml --profile weather --profile monitoring up -d --build
+   ```
+5. Open the UIs through a tunnel from your machine:
+   ```bash
+   ssh -L 8080:localhost:8080 -L 8083:localhost:8083 -L 8088:localhost:8088 -L 3001:localhost:3001 ubuntu@<pipeline_public_ip>
+   ```
+   Airflow http://localhost:8080, Flink http://localhost:8083, Redpanda Console http://localhost:8088, Grafana http://localhost:3001.
+6. In Airflow, unpause the DAGs. Run `admin_boundaries_ingest` first; dbt's spatial joins need it.
+
+Update: `git pull`, then the same `up -d --build` command.
+
 ## Tests
 
 ```bash

@@ -51,3 +51,8 @@ output "spa_bucket" {
 output "cloudfront_distribution_id" {
   value = aws_cloudfront_distribution.spa.id
 }
+
+output "pipeline_public_ip" {
+  description = "Pipeline host (Airflow, Redpanda, Flink, Grafana); fixed across the daily stop/start"
+  value       = aws_eip.pipeline.public_ip
+}

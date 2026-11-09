@@ -86,6 +86,13 @@ resource "aws_security_group" "ecs_api" {
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
+  ingress {
+    description     = "Prometheus on the pipeline host scrapes /metrics"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.pipeline.id]
+  }
   egress {
     from_port   = 0
     to_port     = 0
@@ -102,7 +109,7 @@ resource "aws_security_group" "rds" {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.ecs_api.id]
+    security_groups = [aws_security_group.ecs_api.id, aws_security_group.pipeline.id]
   }
   egress {
     from_port   = 0
