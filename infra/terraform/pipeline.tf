@@ -179,10 +179,17 @@ resource "aws_scheduler_schedule" "pipeline" {
   name                         = "${var.app_name}-pipeline-${each.key}"
   schedule_expression          = each.value.cron
   schedule_expression_timezone = "Asia/Kolkata"
+  state                        = var.pipeline_running ? "ENABLED" : "DISABLED"
   flexible_time_window { mode = "OFF" }
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ec2:${each.value.action}"
     role_arn = aws_iam_role.pipeline_scheduler.arn
     input    = jsonencode({ InstanceIds = [aws_instance.pipeline.id] })
   }
+}
+
+# Off between demos: only the disk and the Elastic IP are billed (~$8/month).
+resource "aws_ec2_instance_state" "pipeline" {
+  instance_id = aws_instance.pipeline.id
+  state       = var.pipeline_running ? "running" : "stopped"
 }

@@ -105,7 +105,7 @@ The API runs on ECS. Airflow + dbt, Redpanda, Flink, the Iceberg REST catalog, P
    Airflow http://localhost:8080, Flink http://localhost:8083, Redpanda Console http://localhost:8088, Grafana http://localhost:3001.
 6. In Airflow, unpause the DAGs. Run `admin_boundaries_ingest` first; dbt's spatial joins need it.
 
-The host is off 01:00–07:00 India time (`pipeline_stop_cron` / `pipeline_start_cron`); its containers come back on their own when it starts, and DAG runs missed overnight run once then.
+`pipeline_running` (default `false`) keeps the host stopped between demos; set it to `true` and apply to run it. While running, it is off 01:00–07:00 India time (`pipeline_stop_cron` / `pipeline_start_cron`); its containers come back on their own when it starts, and DAG runs missed overnight run once then.
 
 Update: `git pull`, then the same `up -d --build` command.
 
