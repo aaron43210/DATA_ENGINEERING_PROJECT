@@ -18,7 +18,7 @@ resource "aws_db_instance" "postgres" {
   final_snapshot_identifier  = "${var.app_name}-final"
   deletion_protection        = true
   multi_az                   = false
-  backup_retention_period    = 7
+  backup_retention_period    = 1 # AWS free plan maximum; raise to 7 after upgrading the account
   auto_minor_version_upgrade = true
   copy_tags_to_snapshot      = true
   storage_encrypted          = true
