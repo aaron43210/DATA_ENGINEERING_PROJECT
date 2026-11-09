@@ -323,7 +323,7 @@ export default function MapView() {
 
   return (
     <div className="h-full flex flex-col bg-white">
-      <div className="flex items-center gap-4 px-4 py-2 bg-gray-50 border-b border-gray-200 text-sm text-gray-900">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 sm:px-4 py-2 bg-gray-50 border-b border-gray-200 text-sm text-gray-900">
         <label className="flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" checked={layers.vector} onChange={() => toggleLayer('vector')} />
           <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
@@ -339,13 +339,13 @@ export default function MapView() {
           <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'linear-gradient(90deg,#22c55e,#eab308,#ef4444)' }} />
           <span>Air quality (AQI)</span>
         </label>
-        {status && <span className="ml-auto text-gray-600 text-xs">{status}</span>}
+        {status && <span className="sm:ml-auto w-full sm:w-auto text-gray-600 text-xs">{status}</span>}
       </div>
       <div className="relative flex-1 min-h-0">
         {/* maplibre-gl.css forces position:relative on the map element, so size it via a wrapper */}
         <div className="absolute inset-0"><div ref={mapContainer} className="w-full h-full" /></div>
         {selected && (
-          <aside className="absolute top-3 left-3 bottom-3 w-80 max-w-[calc(100%-1.5rem)] bg-white rounded-xl shadow-xl border border-gray-200 flex flex-col z-10">
+          <aside className="absolute left-2 right-2 bottom-2 max-h-[55%] sm:max-h-none sm:top-3 sm:left-3 sm:bottom-3 sm:right-auto sm:w-80 bg-white rounded-xl shadow-xl border border-gray-200 flex flex-col z-10">
             <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 {{ vector: 'OSM feature', imagery: 'Sentinel-2 scene', air: 'Air quality station' }[selected.kind]}

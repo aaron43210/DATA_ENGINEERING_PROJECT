@@ -10,9 +10,9 @@ export default function AdminUsage() {
   })
 
   return (
-    <div className="min-h-full bg-white text-gray-900 px-6 py-10">
+    <div className="min-h-full bg-white text-gray-900 px-4 sm:px-6 py-6 sm:py-10">
       <div className="max-w-5xl mx-auto">
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-6">
           <Link to="/dashboard" className="text-gray-600 hover:text-gray-900 text-sm">← Dashboard</Link>
           <h2 className="text-2xl font-bold">Usage — All Users</h2>
           <span className="ml-auto text-xs text-amber-600 bg-amber-400/10 px-2 py-0.5 rounded-full">Admin only</span>

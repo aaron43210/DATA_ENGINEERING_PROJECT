@@ -10,7 +10,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-full bg-white text-gray-900">
-      <main className="max-w-5xl mx-auto px-6 py-10">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
         <h2 className="text-2xl font-bold mb-6">Data Product Catalog</h2>
         {isLoading && <p className="text-gray-600">Loading…</p>}
         {error && <p className="text-red-600">Failed to load catalog.</p>}
