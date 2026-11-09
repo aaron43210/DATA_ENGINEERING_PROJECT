@@ -64,13 +64,10 @@ resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.api.arn
   port              = 80
   protocol          = "HTTP"
+  # Viewers get TLS at CloudFront; the ALB only accepts CloudFront origin traffic.
   default_action {
-    type = "redirect"
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
   }
 }
 
@@ -100,8 +97,8 @@ resource "aws_ecs_task_definition" "api" {
   family                   = "${var.app_name}-api"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 256
+  memory                   = 512
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
 
   container_definitions = jsonencode([{
@@ -109,7 +106,7 @@ resource "aws_ecs_task_definition" "api" {
     image        = "${aws_ecr_repository.api.repository_url}:latest"
     portMappings = [{ containerPort = 8000, protocol = "tcp" }]
     environment = [
-      { name = "POSTGRES_HOST", value = aws_db_instance.postgres.endpoint },
+      { name = "POSTGRES_HOST", value = aws_db_instance.postgres.address },
       { name = "POSTGRES_DB", value = "geoplatform" },
       { name = "POSTGRES_USER", value = "geoplatform" },
       { name = "POSTGRES_SSLMODE", value = "require" },
@@ -139,15 +136,56 @@ resource "aws_ecs_service" "api" {
   task_definition = aws_ecs_task_definition.api.arn
   desired_count   = 1
   launch_type     = "FARGATE"
+  # Public subnets + public IP instead of a NAT gateway (~$35/mo saved).
+  # The security group still only admits traffic from the ALB.
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_api.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.api.arn
     container_name   = "api"
     container_port   = 8000
   }
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
   depends_on = [aws_lb_listener.http]
+}
+
+# One-off schema bootstrap (RDS is private, so it must run inside the VPC):
+#   see infra/README.md "Bootstrap the database"
+resource "aws_ecs_task_definition" "db_bootstrap" {
+  family                   = "${var.app_name}-db-bootstrap"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name    = "bootstrap"
+    image   = "postgres:16-alpine"
+    command = ["sh", "-c", "wget -qO- \"$SQL_URL\" | psql -v ON_ERROR_STOP=1"]
+    environment = [
+      { name = "PGHOST", value = aws_db_instance.postgres.address },
+      { name = "PGDATABASE", value = "geoplatform" },
+      { name = "PGUSER", value = "geoplatform" },
+      { name = "PGSSLMODE", value = "require" },
+      { name = "SQL_URL", value = "https://raw.githubusercontent.com/${var.github_repo}/${var.bootstrap_sql_ref}/scripts/init_postgis.sql" },
+    ]
+    secrets = [
+      { name = "PGPASSWORD", valueFrom = aws_secretsmanager_secret.platform["postgres_password"].arn },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.api.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "bootstrap"
+      }
+    }
+  }])
 }

@@ -4,7 +4,6 @@
 
 - AWS CLI configured (`aws configure`)
 - Terraform ≥ 1.7
-- `psql` available locally (for PostGIS extension bootstrap)
 - Docker + AWS ECR login
 
 ## Deploy Steps
@@ -12,7 +11,7 @@
 ### 1. Create Terraform state bucket (once)
 
 ```bash
-aws s3 mb s3://geoplatform-tf-state --region us-east-1
+aws s3 mb s3://geoplatform-tf-state-<ACCOUNT_ID> --region us-east-1  # match backend.tf
 ```
 
 ### 2. Create `prod.tfvars`
@@ -42,22 +41,26 @@ terraform apply -var-file=prod.tfvars
 ECR_API=$(terraform output -raw ecr_api_url)
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_API"
 docker build -t geoplatform-api ./api
-docker tag geoplatform-api:latest "$ECR_API:latest"
-docker push "$ECR_API:latest"
+docker tag geoplatform-api:latest "${ECR_API}:latest"
+docker push "${ECR_API}:latest"
 ```
 
-### 5. Bootstrap PostGIS (one-time, handled by null_resource)
+### 5. Bootstrap the database (one-time)
 
-Applied automatically by `terraform apply` via the `null_resource.enable_postgis` provisioner.
-To run manually:
+RDS is private, so the schema is loaded by a one-off Fargate task inside the VPC.
+It runs `scripts/init_postgis.sql` from the branch set in `bootstrap_sql_ref`:
 
 ```bash
-psql "$(terraform output -raw rds_endpoint)" -U geoplatform -d geoplatform \
-  -c "CREATE EXTENSION IF NOT EXISTS postgis;" \
-  -c "CREATE EXTENSION IF NOT EXISTS postgis_topology;"
-psql "$(terraform output -raw rds_endpoint)" -U geoplatform -d geoplatform \
-  < ../../scripts/init_postgis.sql
+aws ecs run-task --cluster geoplatform-cluster --launch-type FARGATE \
+  --task-definition geoplatform-db-bootstrap \
+  --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -json public_subnet_ids | jq -r 'join(",")')],securityGroups=[$(terraform output -raw ecs_api_security_group_id)],assignPublicIp=ENABLED}"
+aws logs tail /ecs/geoplatform-api --log-stream-name-prefix bootstrap --follow
 ```
+
+### Tear down
+
+`deletion_protection` is on for RDS. To destroy everything, set it to `false`, then run `terraform apply` and `terraform destroy`.
+A final snapshot named `geoplatform-final` is kept. Delete it in the RDS console if you don't need it.
 
 ### 6. Deploy SPA
 
@@ -71,7 +74,7 @@ aws cloudfront create-invalidation --distribution-id <id> --paths "/*"
 
 | Output | Description |
 |---|---|
-| `api_url` | ALB URL for the FastAPI (also proxied via CloudFront `/api/*`) |
+| `api_url` | Public API base URL (CloudFront `/api`) |
 | `spa_url` | CloudFront URL — this is the public app URL |
 | `rds_endpoint` | RDS host:port |
 | `ecr_api_url` | Push FastAPI image here |

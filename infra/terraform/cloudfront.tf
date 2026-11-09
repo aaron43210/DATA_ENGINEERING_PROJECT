@@ -13,7 +13,7 @@ resource "aws_cloudfront_distribution" "spa" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "https-only"
+      origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
   }
@@ -31,6 +31,10 @@ resource "aws_cloudfront_distribution" "spa" {
     min_ttl     = 0
     default_ttl = 86400
     max_ttl     = 31536000
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_rewrite.arn
+    }
   }
 
   # /api/* routes to the ALB — never cached
@@ -52,19 +56,6 @@ resource "aws_cloudfront_distribution" "spa" {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.strip_api_prefix.arn
     }
-  }
-
-  # 403 from S3 → SPA handles routing (client-side React Router)
-  custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
-
-  custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
   }
 
   web_acl_id          = aws_wafv2_web_acl.api_rate_limit.arn
@@ -92,6 +83,23 @@ resource "aws_cloudfront_function" "strip_api_prefix" {
     function handler(event) {
       var req = event.request;
       req.uri = req.uri.replace(/^\/api/, "") || "/";
+      return req;
+    }
+  JS
+}
+
+# Client-side routes (no file extension) get index.html. Done per-behavior instead of
+# custom_error_response so real API 401/403/404 responses reach the browser intact.
+resource "aws_cloudfront_function" "spa_rewrite" {
+  name    = "${var.app_name}-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = <<-JS
+    function handler(event) {
+      var req = event.request;
+      if (req.uri.indexOf(".") === -1) {
+        req.uri = "/index.html";
+      }
       return req;
     }
   JS

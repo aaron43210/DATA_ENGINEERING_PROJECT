@@ -10,12 +10,6 @@ variable "app_name" {
   default     = "geoplatform"
 }
 
-variable "single_nat_gateway" {
-  description = "Use one shared NAT gateway (cheaper) instead of one per AZ"
-  type        = bool
-  default     = true
-}
-
 variable "acm_cert_arn" {
   description = "ACM certificate ARN for the ALB HTTPS listener (must be in var.aws_region)"
   type        = string
@@ -72,4 +66,10 @@ variable "gf_admin_password" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+variable "bootstrap_sql_ref" {
+  description = "Git branch or commit whose scripts/init_postgis.sql the db-bootstrap task runs"
+  type        = string
+  default     = "development"
 }
