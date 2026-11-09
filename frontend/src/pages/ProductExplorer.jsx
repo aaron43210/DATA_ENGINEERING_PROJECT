@@ -28,11 +28,11 @@ export default function ProductExplorer() {
   const columns = rows.length > 0 ? Object.keys(rows[0]).filter(k => !HIDDEN_COLUMNS.has(k)) : []
 
   return (
-    <div className="min-h-full bg-white text-gray-900 px-6 py-10">
+    <div className="min-h-full bg-white text-gray-900 px-4 sm:px-6 py-6 sm:py-10">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-6">
           <Link to="/dashboard" className="text-gray-600 hover:text-gray-900 text-sm">← Catalog</Link>
-          <h2 className="text-xl font-bold">{product}</h2>
+          <h2 className="text-xl font-bold break-all">{product}</h2>
         </div>
 
         {isLoading && <p className="text-gray-600">Loading…</p>}

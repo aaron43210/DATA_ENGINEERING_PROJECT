@@ -54,7 +54,7 @@ export default function KeyManager() {
 
   return (
     <div className="min-h-full bg-white text-gray-900">
-      <div className="max-w-4xl mx-auto px-6 py-10">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
         <h2 className="text-2xl font-bold mb-6">API Keys</h2>
 
         <div className="bg-gray-50 rounded-xl p-5 border border-gray-200 mb-8 space-y-4">
