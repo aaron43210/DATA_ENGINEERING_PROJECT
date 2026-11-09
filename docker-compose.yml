@@ -461,6 +461,47 @@ services:
     networks:
       - geoplatform-net
 
+  # ── 13. Frontend: React SPA served via nginx (also the rate-limiting layer) ──
+  frontend:
+    build: ./frontend
+    image: geoplatform-frontend:${GEOPLATFORM_IMAGE_TAG:-latest}
+    container_name: geoplatform-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    networks:
+      - geoplatform-net
+
+  # ── 14. Prometheus (opt-in: --profile monitoring) ─────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: geoplatform-prometheus
+    profiles: [monitoring]
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - geoplatform-net
+
+  # ── 15. Grafana (opt-in: --profile monitoring) ────────────────────────────
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: geoplatform-grafana
+    profiles: [monitoring]
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?set in .env}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - geoplatform-net
+
 networks:
   geoplatform-net:
     driver: bridge
