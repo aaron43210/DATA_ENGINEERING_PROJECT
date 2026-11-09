@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
 import os
 
-from fastapi import FastAPI
+import time
+
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
-from prometheus_client import make_asgi_app
+from prometheus_client import Histogram, make_asgi_app
 
 from app.db.postgis import get_db_pool
 from app.routers import datasets, imagery, weather, sensors, vector, auth_router
@@ -39,6 +41,21 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "X-API-Key", "Content-Type"],
 )
+
+REQUEST_LATENCY = Histogram(
+    "request_latency_seconds", "HTTP request latency", ["method", "path", "status"]
+)
+
+
+@app.middleware("http")
+async def record_metrics(request, call_next):
+    t = time.time()
+    response = await call_next(request)
+    REQUEST_LATENCY.labels(request.method, request.url.path, response.status_code).observe(
+        time.time() - t
+    )
+    return response
+
 
 # Prometheus metrics endpoint (/metrics)
 metrics_app = make_asgi_app()

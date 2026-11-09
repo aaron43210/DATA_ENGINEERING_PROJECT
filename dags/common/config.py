@@ -87,6 +87,13 @@ def alert_on_failure(context):
     )
 
 
+def _failure_callback(context):
+    """Log the failure, then send email if SMTP is configured."""
+    alert_on_failure(context)
+    from common.callbacks import notify_on_failure
+    notify_on_failure(context)
+
+
 BASE_DEFAULT_ARGS = {
     "owner": "data-engineer",
     "retries": 3,
@@ -94,7 +101,7 @@ BASE_DEFAULT_ARGS = {
     "retry_exponential_backoff": True,
     "max_retry_delay": timedelta(minutes=30),
     "email_on_failure": False,
-    "on_failure_callback": alert_on_failure,
+    "on_failure_callback": _failure_callback,
 }
 
 # Raw data has landed in Bronze: triggers the Bronze -> Silver (Iceberg) load.
