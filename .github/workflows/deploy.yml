@@ -1,0 +1,78 @@
+name: Deploy to AWS
+
+# Runs only after CI succeeds on main (or by hand). Uses the GitHub "production"
+# environment: add required reviewers there to gate every release.
+on:
+  workflow_run:
+    workflows: [CI Pipeline]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_API_URL: ${{ vars.ECR_API_URL }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_API_SERVICE: ${{ vars.ECS_API_SERVICE }}
+      SPA_BUCKET: ${{ vars.SPA_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API image
+        run: |
+          docker build -t "$ECR_API_URL:$SHA" -t "$ECR_API_URL:latest" ./api
+          docker push "$ECR_API_URL:$SHA"
+          docker push "$ECR_API_URL:latest"
+
+      - name: Roll out API on ECS
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_API_SERVICE" --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_API_SERVICE"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build SPA
+        working-directory: frontend
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish SPA
+        run: |
+          # Hashed assets cache forever; index.html must always revalidate.
+          aws s3 sync frontend/dist/ "s3://$SPA_BUCKET/" --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp frontend/dist/index.html "s3://$SPA_BUCKET/index.html" \
+            --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/index.html" >/dev/null

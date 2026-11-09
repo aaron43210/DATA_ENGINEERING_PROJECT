@@ -3,16 +3,16 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
-  public_cidrs    = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_cidrs   = ["10.0.11.0/24", "10.0.12.0/24"]
+  azs           = slice(data.aws_availability_zones.available.names, 0, 2)
+  public_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "${var.app_name}-vpc" }
+  tags                 = { Name = "${var.app_name}-vpc" }
 }
 
 resource "aws_internet_gateway" "main" {

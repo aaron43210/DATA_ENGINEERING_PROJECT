@@ -76,3 +76,24 @@ aws cloudfront create-invalidation --distribution-id <id> --paths "/*"
 | `rds_endpoint` | RDS host:port |
 | `ecr_api_url` | Push FastAPI image here |
 | `ecr_airflow_url` | Push Airflow image here |
+
+## CI/CD
+
+- `.github/workflows/ci.yml` runs on every PR and push to `main`/`development`: API, frontend, streaming, dbt, and Terraform checks.
+- `.github/workflows/deploy.yml` runs only after CI passes on a push to `main`. It authenticates through GitHub OIDC, so the repo holds no AWS keys.
+
+One-time setup after `terraform apply`:
+
+1. In GitHub, go to Settings → Environments and create `production`. Add required reviewers to gate releases.
+2. Add these environment **variables**, using the Terraform outputs:
+
+| Variable | Source |
+|---|---|
+| `AWS_REGION` | e.g. `us-east-1` |
+| `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` |
+| `ECR_API_URL` | `terraform output -raw ecr_api_url` |
+| `ECS_CLUSTER` | `terraform output -raw ecs_cluster_name` |
+| `ECS_API_SERVICE` | `terraform output -raw ecs_api_service_name` |
+| `SPA_BUCKET` | `terraform output -raw spa_bucket` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | `terraform output -raw cloudfront_distribution_id` |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |

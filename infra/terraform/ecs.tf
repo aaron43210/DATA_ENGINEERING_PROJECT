@@ -105,21 +105,21 @@ resource "aws_ecs_task_definition" "api" {
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
 
   container_definitions = jsonencode([{
-    name  = "api"
-    image = "${aws_ecr_repository.api.repository_url}:latest"
+    name         = "api"
+    image        = "${aws_ecr_repository.api.repository_url}:latest"
     portMappings = [{ containerPort = 8000, protocol = "tcp" }]
     environment = [
-      { name = "POSTGRES_HOST",    value = aws_db_instance.postgres.endpoint },
-      { name = "POSTGRES_DB",      value = "geoplatform" },
-      { name = "POSTGRES_USER",    value = "geoplatform" },
+      { name = "POSTGRES_HOST", value = aws_db_instance.postgres.endpoint },
+      { name = "POSTGRES_DB", value = "geoplatform" },
+      { name = "POSTGRES_USER", value = "geoplatform" },
       { name = "POSTGRES_SSLMODE", value = "require" },
       { name = "AWS_DEFAULT_REGION", value = var.aws_region },
       { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
     ]
     secrets = [
-      { name = "POSTGRES_PASSWORD",   valueFrom = aws_secretsmanager_secret.platform["postgres_password"].arn },
-      { name = "JWT_SECRET",          valueFrom = aws_secretsmanager_secret.platform["jwt_secret"].arn },
-      { name = "API_KEY",             valueFrom = aws_secretsmanager_secret.platform["api_key"].arn },
+      { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.platform["postgres_password"].arn },
+      { name = "JWT_SECRET", valueFrom = aws_secretsmanager_secret.platform["jwt_secret"].arn },
+      { name = "API_KEY", valueFrom = aws_secretsmanager_secret.platform["api_key"].arn },
       { name = "OPENWEATHER_API_KEY", valueFrom = aws_secretsmanager_secret.platform["openweather_api_key"].arn },
     ]
     logConfiguration = {
