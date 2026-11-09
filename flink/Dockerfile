@@ -13,9 +13,9 @@ COPY requirements.txt /opt/flink/requirements.txt
 ENV PIP_DEFAULT_TIMEOUT=600
 # pemja has no arm64 wheel and needs JNI headers to compile; the Flink image is JRE-only.
 COPY --from=kafka-connector-build /opt/java/openjdk/include /opt/java/openjdk/include
-RUN pip3 install --no-cache-dir -r /opt/flink/requirements.txt \
- && pip3 install --no-cache-dir --upgrade "dnspython>=2.9.0"
-# pyarrow, protobuf and httplib2 stay at the apache-beam 2.48 caps until Flink is upgraded past 1.18.
+RUN pip3 install --no-cache-dir -r /opt/flink/requirements.txt
+# pyarrow, protobuf, httplib2 (apache-beam 2.48 caps) and dnspython (needs Python >3.10) stay
+# at their flagged versions until Flink is upgraded past 1.18.
 COPY --from=kafka-connector-build /build/target/sensor-source-envelope-1.0.0.jar /opt/flink/lib/
 COPY --from=kafka-connector-build /build/target/runtime-dependencies/ /opt/flink/lib/
 COPY jobs/geoplatform_stream_job.py jobs/stream_logic.py jobs/submit_and_monitor.sh /opt/flink/jobs/

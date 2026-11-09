@@ -120,6 +120,7 @@ jobs:
       POSTGRES_DB: geoplatform
       POSTGRES_USER: geoplatform
       POSTGRES_PASSWORD: ci-postgres
+      POSTGRES_SSLMODE: disable  # throwaway CI service container has no TLS
     services:
       postgres:
         image: postgis/postgis:16-3.4
