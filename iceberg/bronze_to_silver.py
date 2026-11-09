@@ -108,6 +108,25 @@ def weather_row(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+AIR_POLLUTANTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co", "nh3", "no"]
+
+
+def air_quality_row(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    readings = item.get("raw_response", {}).get("list") or []
+    if not item.get("station_id") or not readings:
+        return None
+    reading = readings[0]
+    parts = reading.get("components", {})
+    return {
+        "station_id": item["station_id"],
+        "event_time": datetime.fromtimestamp(reading["dt"], timezone.utc),
+        "aqi": reading.get("main", {}).get("aqi"),
+        **{p: parts.get(p) for p in AIR_POLLUTANTS},
+        "latitude": item.get("latitude"),
+        "longitude": item.get("longitude"),
+    }
+
+
 class SilverTable(NamedTuple):
     name: str
     source: str  # Bronze `source=` partition
@@ -162,6 +181,19 @@ TABLES = [
             ("longitude", *DOUBLE),
         ],
         weather_row,
+    ),
+    SilverTable(
+        "air_quality_observations",
+        "air_quality",
+        [
+            ("station_id", *STRING),
+            ("event_time", *INSTANT),
+            ("aqi", *LONG),
+            *[(p, *DOUBLE) for p in AIR_POLLUTANTS],
+            ("latitude", *DOUBLE),
+            ("longitude", *DOUBLE),
+        ],
+        air_quality_row,
     ),
 ]
 

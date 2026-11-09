@@ -18,6 +18,7 @@ from airflow.operators.bash import BashOperator
 
 from common.config import (
     BASE_DEFAULT_ARGS,
+    BRONZE_AIR_QUALITY,
     BRONZE_OSM,
     BRONZE_SENTINEL2,
     BRONZE_WEATHER,
@@ -27,7 +28,7 @@ with DAG(
     dag_id="bronze_to_silver",
     default_args={**BASE_DEFAULT_ARGS, "owner": "angel"},
     description="Load new Bronze objects into Iceberg Silver tables",
-    schedule=(BRONZE_OSM | BRONZE_SENTINEL2 | BRONZE_WEATHER),
+    schedule=(BRONZE_OSM | BRONZE_SENTINEL2 | BRONZE_WEATHER | BRONZE_AIR_QUALITY),
     start_date=datetime(2024, 1, 1),
     catchup=False,
     max_active_runs=1,

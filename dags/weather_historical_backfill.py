@@ -28,6 +28,7 @@ from common.config import (
     BRONZE_BUCKET,
     BRONZE_WEATHER,
     BASE_DEFAULT_ARGS,
+    KERALA_STATIONS,
     bronze_key,
     get_s3_client,
     pg_connection,
@@ -36,19 +37,7 @@ from common.config import (
 logger = logging.getLogger(__name__)
 
 SOURCE = "weather"
-# Same stations as the real-time producer so batch + stream align on station_id.
-CITIES = [
-    {
-        "name": "Thiruvananthapuram",
-        "lat": 8.5241,
-        "lon": 76.9366,
-        "station_id": "WX_TVM",
-    },
-    {"name": "Kochi", "lat": 9.9312, "lon": 76.2673, "station_id": "WX_COK"},
-    {"name": "Kozhikode", "lat": 11.2588, "lon": 75.7804, "station_id": "WX_CCJ"},
-    {"name": "Thrissur", "lat": 10.5276, "lon": 76.2144, "station_id": "WX_TCR"},
-    {"name": "Kollam", "lat": 8.8932, "lon": 76.6141, "station_id": "WX_QLN"},
-]
+CITIES = KERALA_STATIONS
 
 
 def fetch_to_bronze(**context):
