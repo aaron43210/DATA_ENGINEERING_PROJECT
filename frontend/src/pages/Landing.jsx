@@ -20,6 +20,7 @@ export default function Landing() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-white text-gray-900 px-4">
       <div className="mb-8 text-center">
+        <img src="/icon.png" alt="" width="96" height="96" className="mx-auto mb-4" />
         <h1 className="text-4xl font-bold tracking-tight mb-2">Geospatial Data Platform</h1>
         <p className="text-gray-600 text-lg">Kerala · Cloud-Native · Real-Time</p>
       </div>
