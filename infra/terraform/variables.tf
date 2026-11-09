@@ -118,3 +118,9 @@ variable "pipeline_stop_cron" {
   type        = string
   default     = "cron(0 1 * * ? *)"
 }
+
+variable "pipeline_running" {
+  description = "Run the pipeline host (Airflow, Flink, Redpanda) on its daily schedule; false keeps it stopped"
+  type        = bool
+  default     = false
+}
