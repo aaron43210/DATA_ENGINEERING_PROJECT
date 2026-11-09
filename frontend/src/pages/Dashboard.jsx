@@ -22,7 +22,7 @@ export default function Dashboard() {
                 <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">{p.domain}</span>
               </div>
               <p className="text-gray-600 text-sm flex-1">{p.description}</p>
-              <div className="text-xs text-gray-500">SLA: {p.sla_freshness_hours}h · {p.owner_team}</div>
+              <div className="text-xs text-gray-500">SLA: {p.sla_freshness_hours}h</div>
               {p.output_port_rest && (
                 <Link to={`/explore/${p.product_id}`}
                   className="mt-2 text-sm text-blue-600 hover:text-blue-300">
