@@ -42,8 +42,8 @@ variable "jwt_secret" {
   sensitive   = true
 }
 
-variable "api_key" {
-  description = "Legacy API_KEY env var (deprecated escape hatch)"
+variable "origin_verify_secret" {
+  description = "Shared secret CloudFront sends to the ALB (X-Origin-Verify); requests without it get 403"
   type        = string
   sensitive   = true
 }
@@ -66,6 +66,17 @@ variable "gf_admin_password" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+variable "budget_alert_email" {
+  description = "Email that receives AWS budget alerts"
+  type        = string
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly cost budget; alerts at 80% actual and 100% forecast"
+  type        = number
+  default     = 50
 }
 
 variable "bootstrap_sql_ref" {

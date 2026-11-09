@@ -64,10 +64,30 @@ resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.api.arn
   port              = 80
   protocol          = "HTTP"
-  # Viewers get TLS at CloudFront; the ALB only accepts CloudFront origin traffic.
+  # Viewers get TLS at CloudFront. The security group admits any CloudFront edge, so
+  # the listener also requires the secret header only our distribution sends.
   default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Forbidden"
+      status_code  = "403"
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "from_cloudfront" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 10
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
+  }
+  condition {
+    http_header {
+      http_header_name = "X-Origin-Verify"
+      values           = [var.origin_verify_secret]
+    }
   }
 }
 
@@ -109,14 +129,15 @@ resource "aws_ecs_task_definition" "api" {
       { name = "POSTGRES_HOST", value = aws_db_instance.postgres.address },
       { name = "POSTGRES_DB", value = "geoplatform" },
       { name = "POSTGRES_USER", value = "geoplatform" },
-      { name = "POSTGRES_SSLMODE", value = "require" },
+      { name = "POSTGRES_SSLMODE", value = "verify-full" },
+      { name = "POSTGRES_SSLROOTCERT", value = "/etc/ssl/rds-global-bundle.pem" },
       { name = "AWS_DEFAULT_REGION", value = var.aws_region },
       { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
+      { name = "ROOT_PATH", value = "/api" },
     ]
     secrets = [
       { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.platform["postgres_password"].arn },
       { name = "JWT_SECRET", valueFrom = aws_secretsmanager_secret.platform["jwt_secret"].arn },
-      { name = "API_KEY", valueFrom = aws_secretsmanager_secret.platform["api_key"].arn },
       { name = "OPENWEATHER_API_KEY", valueFrom = aws_secretsmanager_secret.platform["openweather_api_key"].arn },
     ]
     logConfiguration = {
@@ -152,7 +173,7 @@ resource "aws_ecs_service" "api" {
     enable   = true
     rollback = true
   }
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener_rule.from_cloudfront]
 }
 
 # One-off schema bootstrap (RDS is private, so it must run inside the VPC):
@@ -168,12 +189,13 @@ resource "aws_ecs_task_definition" "db_bootstrap" {
   container_definitions = jsonencode([{
     name    = "bootstrap"
     image   = "postgres:16-alpine"
-    command = ["sh", "-c", "wget -qO- \"$SQL_URL\" | psql -v ON_ERROR_STOP=1"]
+    command = ["sh", "-c", "wget -qO \"$PGSSLROOTCERT\" https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem && wget -qO- \"$SQL_URL\" | psql -v ON_ERROR_STOP=1"]
     environment = [
       { name = "PGHOST", value = aws_db_instance.postgres.address },
       { name = "PGDATABASE", value = "geoplatform" },
       { name = "PGUSER", value = "geoplatform" },
-      { name = "PGSSLMODE", value = "require" },
+      { name = "PGSSLMODE", value = "verify-full" },
+      { name = "PGSSLROOTCERT", value = "/tmp/rds-global-bundle.pem" },
       { name = "SQL_URL", value = "https://raw.githubusercontent.com/${var.github_repo}/${var.bootstrap_sql_ref}/scripts/init_postgis.sql" },
     ]
     secrets = [

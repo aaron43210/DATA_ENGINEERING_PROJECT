@@ -112,7 +112,7 @@ services:
       - ./scripts/init_airflow_db.sh:/docker-entrypoint-initdb.d/00_init_airflow_db.sh:ro
       - ./scripts/init_postgis.sql:/docker-entrypoint-initdb.d/01_init_postgis.sql:ro
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-geoplatform} -d ${POSTGRES_DB:-geoplatform}"]
       interval: 10s
@@ -133,8 +133,8 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -209,9 +209,9 @@ services:
       - --advertise-pandaproxy-addr localhost:8082
       - --schema-registry-addr 0.0.0.0:8081
     ports:
-      - "19092:19092"
-      - "8081:8081"   # Schema Registry
-      - "8082:8082"   # Pandaproxy
+      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:8081:8081"   # Schema Registry
+      - "127.0.0.1:8082:8082"   # Pandaproxy
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -252,7 +252,7 @@ services:
     container_name: geoplatform-redpanda-console
     restart: unless-stopped
     ports:
-      - "8088:8080"
+      - "127.0.0.1:8088:8080"
     environment:
       CONFIG_FILEPATH: /etc/redpanda-console/config.yml
     volumes:
@@ -343,7 +343,7 @@ services:
     restart: unless-stopped
     command: webserver
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
@@ -369,7 +369,7 @@ services:
     container_name: geoplatform-flink-jobmanager
     command: jobmanager
     ports:
-      - "8083:8081"   # Flink UI / REST (8081 on the host is the Schema Registry)
+      - "127.0.0.1:8083:8081"   # Flink UI / REST (8081 on the host is the Schema Registry)
     environment:
       <<: *flink-env
       FLINK_PROPERTIES: |
@@ -444,7 +444,7 @@ services:
     container_name: geoplatform-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
@@ -453,7 +453,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
       POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
       JWT_SECRET: ${JWT_SECRET:?set in .env}
-      API_KEY: ${API_KEY:?set in .env}
+      SESSION_COOKIE_SECURE: "false"  # local stack is plain HTTP
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
     depends_on:
       postgres:
@@ -468,7 +468,7 @@ services:
     container_name: geoplatform-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "127.0.0.1:80:80"
     depends_on:
       - api
     networks:
@@ -492,7 +492,7 @@ services:
     profiles: [monitoring]
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?set in .env}
     volumes:

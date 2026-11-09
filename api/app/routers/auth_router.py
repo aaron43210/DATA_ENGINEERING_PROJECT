@@ -4,6 +4,7 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse, Response
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -12,12 +13,23 @@ from google.auth.transport import requests as google_requests
 import jwt
 from datetime import datetime, timedelta, timezone
 
-from app.auth import verify_access, JWT_SECRET, ALGORITHM
+from app.auth import (
+    ALGORITHM,
+    JWT_AUDIENCE,
+    JWT_ISSUER,
+    JWT_SECRET,
+    SESSION_COOKIE,
+    SESSION_HOURS,
+    require_session,
+)
 from app.db.postgis import get_db
 
 logger = logging.getLogger(__name__)
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+# Browsers accept Secure cookies on http://localhost; set false only for other plain-HTTP hosts.
+COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "true").lower() != "false"
+MAX_ACTIVE_KEYS = 5
 
 router = APIRouter(tags=["auth"])
 
@@ -30,11 +42,15 @@ def _sha256(value: str) -> str:
 
 
 def _make_jwt(user_id: int, email: str, role: str) -> str:
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": email,
         "user_id": user_id,
         "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=24),
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
+        "iat": now,
+        "exp": now + timedelta(hours=SESSION_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
 
@@ -43,12 +59,14 @@ def _make_jwt(user_id: int, email: str, role: str) -> str:
 
 
 class GoogleCredential(BaseModel):
-    credential: str
+    credential: str = Field(max_length=4096)
 
 
 class KeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    scope: Literal["all", "satellite_imagery", "osm_vector_product", "live_weather_stream"] = "all"
+    scope: Literal[
+        "all", "satellite_imagery", "osm_vector_product", "live_weather_stream"
+    ] = "all"
     expires_in_days: Optional[Literal[7, 30, 90, 365]] = 30  # None = never expires
 
 
@@ -57,7 +75,7 @@ class KeyCreate(BaseModel):
 
 @router.post("/auth/google")
 async def google_auth(body: GoogleCredential, db=Depends(get_db)):
-    """Verify Google id_token, upsert user, return platform JWT."""
+    """Verify a Google id_token, upsert the user, and start an HttpOnly cookie session."""
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=503, detail="Google OAuth not configured")
     try:
@@ -66,8 +84,9 @@ async def google_auth(body: GoogleCredential, db=Depends(get_db)):
             google_requests.Request(),
             GOOGLE_CLIENT_ID,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=f"Invalid Google token: {exc}")
+    except ValueError:
+        logger.info("Rejected Google sign-in token", exc_info=True)
+        raise HTTPException(status_code=401, detail="Invalid Google sign-in token")
 
     google_sub = info["sub"]
     email = info.get("email", "")
@@ -84,12 +103,37 @@ async def google_auth(body: GoogleCredential, db=Depends(get_db)):
         email,
         name,
     )
-    token = _make_jwt(row["id"], email, row["role"])
-    return {"token": token, "user": {"email": email, "name": name, "role": row["role"]}}
+    response = JSONResponse(
+        {"user": {"email": email, "name": name, "role": row["role"]}}
+    )
+    response.set_cookie(
+        SESSION_COOKIE,
+        _make_jwt(row["id"], email, row["role"]),
+        max_age=SESSION_HOURS * 3600,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@router.post("/auth/logout", status_code=204)
+async def logout():
+    response = Response(status_code=204)
+    response.delete_cookie(
+        SESSION_COOKIE, path="/", secure=COOKIE_SECURE, httponly=True, samesite="strict"
+    )
+    return response
+
+
+@router.get("/auth/me")
+async def me(user: dict = Depends(require_session)):
+    return {"email": user["user"], "role": user["role"]}
 
 
 @router.get("/keys")
-async def list_keys(db=Depends(get_db), user: dict = Depends(verify_access)):
+async def list_keys(db=Depends(get_db), user: dict = Depends(require_session)):
     """List the caller's API keys."""
     rows = await db.fetch(
         """
@@ -107,9 +151,22 @@ async def list_keys(db=Depends(get_db), user: dict = Depends(verify_access)):
 
 @router.post("/keys", status_code=201)
 async def create_key(
-    body: KeyCreate, db=Depends(get_db), user: dict = Depends(verify_access)
+    body: KeyCreate, db=Depends(get_db), user: dict = Depends(require_session)
 ):
     """Generate a new API key. Raw key returned exactly once."""
+    active = await db.fetchval(
+        """
+        SELECT COUNT(*) FROM api_keys
+        WHERE user_id = (SELECT id FROM api_users WHERE email = $1)
+          AND is_active AND (expires_at IS NULL OR expires_at > now())
+        """,
+        user["user"],
+    )
+    if active >= MAX_ACTIVE_KEYS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"You already have {MAX_ACTIVE_KEYS} active keys. Revoke one first.",
+        )
     expires_at = (
         datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
         if body.expires_in_days
@@ -141,7 +198,7 @@ async def create_key(
 
 @router.delete("/keys/{key_prefix}", status_code=204)
 async def revoke_key(
-    key_prefix: str, db=Depends(get_db), user: dict = Depends(verify_access)
+    key_prefix: str, db=Depends(get_db), user: dict = Depends(require_session)
 ):
     """Deactivate a key. Only the owner can revoke their own key."""
     result = await db.execute(
@@ -159,7 +216,7 @@ async def revoke_key(
 
 
 @router.get("/admin/usage")
-async def admin_usage(db=Depends(get_db), user: dict = Depends(verify_access)):
+async def admin_usage(db=Depends(get_db), user: dict = Depends(require_session)):
     """Admin-only: all users with key count and total calls today."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")

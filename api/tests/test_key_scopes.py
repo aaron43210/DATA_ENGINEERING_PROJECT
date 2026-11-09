@@ -7,14 +7,20 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.auth import _verify_db_api_key, require_scope
+from app.db.postgis import get_db
 from app.main import app
-from app.routers.auth_router import KeyCreate
+from app.routers.auth_router import KeyCreate, MAX_ACTIVE_KEYS, _make_jwt
+
+SESSION = {"Authorization": f"Bearer {_make_jwt(1, 'owner@example.com', 'reader')}"}
 
 
 def test_scoped_key_only_reaches_its_product():
     check = require_scope("satellite_imagery")
 
-    assert asyncio.run(check(user={"scope": "satellite_imagery"}))["scope"] == "satellite_imagery"
+    assert (
+        asyncio.run(check(user={"scope": "satellite_imagery"}))["scope"]
+        == "satellite_imagery"
+    )
     assert asyncio.run(check(user={"scope": "all"}))["scope"] == "all"
     with pytest.raises(HTTPException) as exc:
         asyncio.run(check(user={"scope": "live_weather_stream"}))
@@ -31,8 +37,10 @@ def test_key_create_rejects_unknown_scope_and_expiry():
 
 
 class _Pool:
-    def __init__(self, row):
-        self.row = row
+    """Fake pool: the atomic UPDATE returns `ok`; the follow-up status SELECT returns `status`."""
+
+    def __init__(self, ok=None, status=None):
+        self.ok, self.status = ok, status
 
     def acquire(self):
         pool = self
@@ -48,41 +56,73 @@ class _Pool:
 
     async def fetchrow(self, query, key_hash):
         assert key_hash == hashlib.sha256(b"k").hexdigest()
-        return self.row
-
-    async def execute(self, *a):
-        return "UPDATE 1"
+        return self.ok if "UPDATE" in query else self.status
 
 
-def _request(row):
+def _request(pool):
     class Req:
         class app:
             class state:
-                pool = _Pool(row)
+                pass
 
+    Req.app.state.pool = pool
     return Req()
 
 
-def _row(**over):
-    from datetime import date
-
-    return {"id": 1, "user_id": 1, "is_active": True, "quota_day": 500, "calls_today": 0,
-            "quota_reset_at": date.today(), "scope": "osm_vector_product", "expired": False,
-            "email": "a@b.c", "role": "reader", **over}
-
-
-def test_expired_key_is_rejected():
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(_verify_db_api_key("k", _request(_row(expired=True))))
-    assert exc.value.status_code == 401
-    assert exc.value.detail == "API key expired"
+def _verify(pool):
+    return asyncio.run(_verify_db_api_key("k", _request(pool)))
 
 
 def test_valid_key_carries_its_scope():
-    assert asyncio.run(_verify_db_api_key("k", _request(_row())))["scope"] == "osm_vector_product"
+    pool = _Pool(ok={"scope": "osm_vector_product", "email": "a@b.c", "role": "reader"})
+    assert _verify(pool)["scope"] == "osm_vector_product"
+
+
+@pytest.mark.parametrize(
+    "status,code,detail",
+    [
+        (None, 401, "Invalid or inactive API key"),
+        ({"is_active": False, "expired": False}, 401, "Invalid or inactive API key"),
+        ({"is_active": True, "expired": True}, 401, "API key expired"),
+        ({"is_active": True, "expired": False}, 429, "Daily quota exceeded"),
+    ],
+)
+def test_rejected_key_reports_why(status, code, detail):
+    with pytest.raises(HTTPException) as exc:
+        _verify(_Pool(ok=None, status=status))
+    assert (exc.value.status_code, exc.value.detail) == (code, detail)
 
 
 def test_data_routes_require_auth():
     client = TestClient(app)
     for path in ("/imagery/", "/vector/features", "/weather/", "/sensors/"):
         assert client.get(path).status_code == 401
+
+
+def test_api_keys_cannot_manage_keys():
+    client = TestClient(app)
+    key = {"X-API-Key": "any-key"}
+    assert client.get("/keys", headers=key).status_code == 401
+    assert client.post("/keys", headers=key, json={"name": "x"}).status_code == 401
+    assert client.delete("/keys/abcdefgh", headers=key).status_code == 401
+    assert client.get("/admin/usage", headers=key).status_code == 401
+
+
+def test_key_creation_capped_per_user():
+    class FullDB:
+        async def fetchval(self, query, email):
+            return MAX_ACTIVE_KEYS
+
+    async def full_db():
+        yield FullDB()
+
+    previous = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = full_db
+    try:
+        r = TestClient(app).post("/keys", headers=SESSION, json={"name": "x"})
+    finally:
+        if previous:
+            app.dependency_overrides[get_db] = previous
+        else:
+            app.dependency_overrides.pop(get_db, None)
+    assert r.status_code == 409

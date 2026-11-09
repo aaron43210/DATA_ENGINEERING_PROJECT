@@ -226,7 +226,7 @@ def main() -> int:
         dbname=os.environ.get("POSTGRES_DB", "geoplatform"),
         user=os.environ.get("POSTGRES_USER", "geoplatform"),
         password=env("POSTGRES_PASSWORD"),
-        sslmode=os.environ.get("POSTGRES_SSLMODE", "prefer"),
+        sslmode=os.environ.get("POSTGRES_SSLMODE", "require"),
     )
     try:
         total = sum(sync_table(catalog, conn, table) for table in STREAM_TABLES)

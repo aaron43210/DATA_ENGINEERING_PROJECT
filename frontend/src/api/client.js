@@ -1,14 +1,11 @@
 const BASE = import.meta.env.VITE_API_BASE || '/api'
 
+// The session is an HttpOnly cookie set by /auth/google, so scripts never see the token.
 async function request(path, options = {}) {
-  const token = localStorage.getItem('gp_token')
   const headers = { 'Content-Type': 'application/json', ...options.headers }
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(`${BASE}${path}`, { ...options, headers, credentials: 'same-origin' })
 
-  const res = await fetch(`${BASE}${path}`, { ...options, headers })
-
-  if (res.status === 401) {
-    localStorage.removeItem('gp_token')
+  if (res.status === 401 && !path.startsWith('/auth/')) {
     localStorage.removeItem('gp_user')
     window.location.href = '/'
     return

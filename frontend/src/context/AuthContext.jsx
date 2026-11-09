@@ -1,29 +1,29 @@
 import { createContext, useContext, useState } from 'react'
+import { api } from '../api/client.js'
 
 const AuthContext = createContext(null)
+
+// Only the non-secret profile is kept client-side; the session itself is an HttpOnly cookie.
+localStorage.removeItem('gp_token')
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('gp_user')) } catch { return null }
   })
-  const [token, setToken] = useState(() => localStorage.getItem('gp_token'))
 
-  function login(token, user) {
-    localStorage.setItem('gp_token', token)
+  function login(user) {
     localStorage.setItem('gp_user', JSON.stringify(user))
-    setToken(token)
     setUser(user)
   }
 
-  function logout() {
-    localStorage.removeItem('gp_token')
+  async function logout() {
     localStorage.removeItem('gp_user')
-    setToken(null)
     setUser(null)
+    await api.post('/auth/logout').catch(() => {})
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout }}>
       {children}
     </AuthContext.Provider>
   )

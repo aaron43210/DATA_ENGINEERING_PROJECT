@@ -44,6 +44,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         Action = [
           "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage",
+          "ecr:DescribeImages", "ecr:GetDownloadUrlForLayer",
         ]
         Resource = [aws_ecr_repository.api.arn, aws_ecr_repository.airflow.arn]
       },

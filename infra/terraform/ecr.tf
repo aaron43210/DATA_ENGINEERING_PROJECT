@@ -1,13 +1,23 @@
 resource "aws_ecr_repository" "api" {
-  name                 = "${var.app_name}-api"
-  image_tag_mutability = "MUTABLE"
+  name = "${var.app_name}-api"
+  # Git-SHA tags are immutable (rollback integrity); only the moving "latest" tag may be overwritten.
+  image_tag_mutability = "IMMUTABLE_WITH_EXCLUSION"
+  image_tag_mutability_exclusion_filter {
+    filter      = "latest"
+    filter_type = "WILDCARD"
+  }
   image_scanning_configuration { scan_on_push = true }
   tags = { Name = "${var.app_name}-api" }
 }
 
 resource "aws_ecr_repository" "airflow" {
-  name                 = "${var.app_name}-airflow"
-  image_tag_mutability = "MUTABLE"
+  name = "${var.app_name}-airflow"
+  # Git-SHA tags are immutable (rollback integrity); only the moving "latest" tag may be overwritten.
+  image_tag_mutability = "IMMUTABLE_WITH_EXCLUSION"
+  image_tag_mutability_exclusion_filter {
+    filter      = "latest"
+    filter_type = "WILDCARD"
+  }
   image_scanning_configuration { scan_on_push = true }
   tags = { Name = "${var.app_name}-airflow" }
 }

@@ -51,7 +51,7 @@ def pg_connection(**connect_kwargs):
         dbname=os.environ.get("POSTGRES_DB", "geoplatform"),
         user=os.environ.get("POSTGRES_USER", "geoplatform"),
         password=require_env("POSTGRES_PASSWORD"),
-        sslmode=os.environ.get("POSTGRES_SSLMODE", "prefer"),
+        sslmode=os.environ.get("POSTGRES_SSLMODE", "require"),
         **connect_kwargs,
     )
     try:

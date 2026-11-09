@@ -1,5 +1,7 @@
 import os
 import json
+import ssl
+
 import asyncpg
 from fastapi import Request
 
@@ -14,6 +16,16 @@ async def init_connection(conn):
     )
 
 
+def ssl_setting():
+    """POSTGRES_SSLMODE: verify-full checks the server certificate and hostname against
+    POSTGRES_SSLROOTCERT (the RDS CA bundle baked into the image); require only encrypts.
+    """
+    mode = os.getenv("POSTGRES_SSLMODE", "require")
+    if mode == "verify-full":
+        return ssl.create_default_context(cafile=os.environ["POSTGRES_SSLROOTCERT"])
+    return mode
+
+
 async def get_db_pool():
     """Create PostgreSQL connection pool."""
     return await asyncpg.create_pool(
@@ -22,7 +34,7 @@ async def get_db_pool():
         database=os.getenv("POSTGRES_DB", "geoplatform"),
         user=os.getenv("POSTGRES_USER", "geoplatform"),
         password=os.environ["POSTGRES_PASSWORD"],
-        ssl=os.getenv("POSTGRES_SSLMODE", "prefer"),
+        ssl=ssl_setting(),
         init=init_connection,
     )
 

@@ -5,22 +5,25 @@ resource "aws_db_parameter_group" "postgres16" {
 }
 
 resource "aws_db_instance" "postgres" {
-  identifier                = "${var.app_name}-postgres"
-  engine                    = "postgres"
-  engine_version            = "16.3"
-  instance_class            = "db.t3.micro"
-  allocated_storage         = 20
-  db_name                   = "geoplatform"
-  username                  = "geoplatform"
-  password                  = var.postgres_password
-  publicly_accessible       = false
-  skip_final_snapshot       = false
-  final_snapshot_identifier = "${var.app_name}-final"
-  deletion_protection       = true
-  multi_az                  = false
-  storage_encrypted         = true
-  parameter_group_name      = aws_db_parameter_group.postgres16.name
-  db_subnet_group_name      = aws_db_subnet_group.main.name
-  vpc_security_group_ids    = [aws_security_group.rds.id]
-  tags                      = { Name = "${var.app_name}-postgres" }
+  identifier                 = "${var.app_name}-postgres"
+  engine                     = "postgres"
+  engine_version             = "16.3"
+  instance_class             = "db.t3.micro"
+  allocated_storage          = 20
+  db_name                    = "geoplatform"
+  username                   = "geoplatform"
+  password                   = var.postgres_password
+  publicly_accessible        = false
+  skip_final_snapshot        = false
+  final_snapshot_identifier  = "${var.app_name}-final"
+  deletion_protection        = true
+  multi_az                   = false
+  backup_retention_period    = 7
+  auto_minor_version_upgrade = true
+  copy_tags_to_snapshot      = true
+  storage_encrypted          = true
+  parameter_group_name       = aws_db_parameter_group.postgres16.name
+  db_subnet_group_name       = aws_db_subnet_group.main.name
+  vpc_security_group_ids     = [aws_security_group.rds.id]
+  tags                       = { Name = "${var.app_name}-postgres" }
 }
