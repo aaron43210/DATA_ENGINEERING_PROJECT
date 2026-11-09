@@ -96,9 +96,9 @@ variable "pipeline_public_key" {
 }
 
 variable "pipeline_instance_type" {
-  description = "Pipeline host size; 8 GB fits with the lowered Flink memory in .env.aws.example plus swap"
+  description = "Pipeline host size (8 GB). m7i-flex.large is allowed on the AWS Free plan; t3.large is ~$9/month cheaper once the account is upgraded"
   type        = string
-  default     = "t3.large"
+  default     = "m7i-flex.large"
 }
 
 variable "pipeline_repo_url" {
