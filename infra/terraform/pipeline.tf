@@ -87,9 +87,12 @@ resource "aws_instance" "pipeline" {
     http_put_response_hop_limit = 2
   }
 
-  # Standard credits: a busy CPU slows down instead of adding surplus-credit charges.
-  credit_specification {
-    cpu_credits = "standard"
+  # Burstable (t*) types: a busy CPU slows down instead of adding surplus-credit charges.
+  dynamic "credit_specification" {
+    for_each = startswith(var.pipeline_instance_type, "t") ? [1] : []
+    content {
+      cpu_credits = "standard"
+    }
   }
 
   root_block_device {
