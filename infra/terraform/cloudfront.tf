@@ -48,6 +48,10 @@ resource "aws_cloudfront_distribution" "spa" {
     min_ttl     = 0
     default_ttl = 0
     max_ttl     = 0
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.strip_api_prefix.arn
+    }
   }
 
   # 403 from S3 → SPA handles routing (client-side React Router)
@@ -77,4 +81,18 @@ resource "aws_cloudfront_distribution" "spa" {
   }
 
   tags = { Name = "${var.app_name}-cloudfront" }
+}
+
+# FastAPI routes have no /api prefix; nginx strips it locally, this does it on AWS.
+resource "aws_cloudfront_function" "strip_api_prefix" {
+  name    = "${var.app_name}-strip-api-prefix"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = <<-JS
+    function handler(event) {
+      var req = event.request;
+      req.uri = req.uri.replace(/^\/api/, "") || "/";
+      return req;
+    }
+  JS
 }
