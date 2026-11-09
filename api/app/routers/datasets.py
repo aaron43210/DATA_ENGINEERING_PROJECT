@@ -11,7 +11,6 @@ class DataProduct(BaseModel):
     product_id: str
     name: str
     domain: str
-    owner_team: str
     description: str
     sla_freshness_hours: int
     output_port_rest: Optional[str] = None
@@ -26,7 +25,7 @@ async def list_data_products(
     Returns the registry of all available data products and their output ports.
     """
     query = """
-        SELECT product_id, name, domain, owner_team, description,
+        SELECT product_id, name, domain, description,
                sla_freshness_hours, output_port_rest
         FROM data_products
         WHERE status = 'active'
