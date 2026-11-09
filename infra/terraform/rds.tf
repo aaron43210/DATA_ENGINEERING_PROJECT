@@ -21,6 +21,7 @@ resource "aws_db_instance" "postgres" {
   backup_retention_period    = 1 # AWS free plan maximum; raise to 7 after upgrading the account
   auto_minor_version_upgrade = true
   copy_tags_to_snapshot      = true
+  apply_immediately          = true # do not wait for the weekly maintenance window
   storage_encrypted          = true
   parameter_group_name       = aws_db_parameter_group.postgres16.name
   db_subnet_group_name       = aws_db_subnet_group.main.name
