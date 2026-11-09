@@ -17,6 +17,14 @@ const TYPE_LABELS = {
   highway_trunk: 'Trunk road', highway_primary: 'Primary road',
 }
 const QUALITY_BADGE = { Excellent: 'bg-emerald-100 text-emerald-800', Good: 'bg-blue-100 text-blue-800', Poor: 'bg-gray-200 text-gray-700' }
+// OpenWeather AQI 1..5
+const AQI_COLORS = { 1: '#22c55e', 2: '#eab308', 3: '#f97316', 4: '#ef4444', 5: '#7e22ce' }
+const POLLUTANTS = [['pm2_5', 'PM2.5'], ['pm10', 'PM10'], ['no2', 'NO₂'], ['o3', 'O₃'], ['so2', 'SO₂'], ['co', 'CO'], ['nh3', 'NH₃'], ['no', 'NO']]
+const LAYER_IDS = {
+  vector: ['vector-points', 'vector-lines'],
+  imagery: ['imagery-fills', 'imagery-outlines'],
+  air: ['air-points'],
+}
 
 const empty = { type: 'FeatureCollection', features: [] }
 
@@ -117,12 +125,30 @@ function ImageryDetail({ scenes, index, onPick }) {
   )
 }
 
+function AirDetail({ s }) {
+  return (
+    <>
+      <span className="inline-block text-xs px-2 py-0.5 rounded-full mb-2 text-white" style={{ background: AQI_COLORS[s.aqi] }}>
+        AQI {s.aqi} · {s.aqi_label}
+      </span>
+      <h3 className="text-lg font-semibold mb-3">{s.city_name || s.station_id}</h3>
+      <Row label="Station">{s.station_id}</Row>
+      <Row label="Measured">{toDate(s.event_time).toLocaleString()}</Row>
+      <Row label="Coordinates">{s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}</Row>
+      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-5 mb-1">Pollutants <span className="normal-case">(µg/m³)</span></h4>
+      {POLLUTANTS.map(([k, label]) => <Row key={k} label={label}>{s[k] == null ? '—' : s[k].toFixed(2)}</Row>)}
+      <p className="text-xs text-gray-500 mt-4">Scale: 1 Good, 2 Fair, 3 Moderate, 4 Poor, 5 Very Poor. Source: OpenWeather, refreshed hourly.</p>
+    </>
+  )
+}
+
 export default function MapView() {
   const mapContainer = useRef(null)
   const map = useRef(null)
   const vectorRows = useRef([])
   const imageryRows = useRef([])
-  const [layers, setLayers] = useState({ vector: true, imagery: false })
+  const airRows = useRef([])
+  const [layers, setLayers] = useState({ vector: true, imagery: false, air: true })
   const [status, setStatus] = useState('')
   const [selected, setSelected] = useState(null)
 
@@ -156,12 +182,17 @@ export default function MapView() {
         paint: { 'line-color': '#2563eb', 'line-width': 4 } })
       m.addLayer({ id: 'selected-point', type: 'circle', source: 'selected', filter: ['==', ['geometry-type'], 'Point'],
         paint: { 'circle-radius': 9, 'circle-color': '#2563eb', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } })
-      loadVectorLayer()
+      loadVectorLayer().then(loadAirLayer)
     })
 
     m.on('click', (e) => {
       const near = [[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]]
       const has = id => m.getLayer(id) && m.getLayoutProperty(id, 'visibility') !== 'none'
+      const station = has('air-points') ? m.queryRenderedFeatures(near, { layers: ['air-points'] })[0] : null
+      if (station) {
+        setSelected({ kind: 'air', row: airRows.current[station.properties.i] })
+        return
+      }
       const vectorLayers = ['vector-points', 'vector-lines'].filter(has)
       const hit = vectorLayers.length ? m.queryRenderedFeatures(near, { layers: vectorLayers }) : []
       const hitPoint = hit.find(f => f.layer.id === 'vector-points') || hit[0]
@@ -180,7 +211,7 @@ export default function MapView() {
     })
 
     const pointer = (on) => () => { m.getCanvas().style.cursor = on ? 'pointer' : '' }
-    for (const id of ['vector-points', 'vector-lines', 'imagery-fills']) {
+    for (const id of ['vector-points', 'vector-lines', 'imagery-fills', 'air-points']) {
       m.on('mouseenter', id, pointer(true))
       m.on('mouseleave', id, pointer(false))
     }
@@ -190,7 +221,8 @@ export default function MapView() {
     const src = map.current?.getSource('selected')
     if (!src) return
     const geom = selected?.kind === 'vector' ? selected.row.geometry
-      : selected?.kind === 'imagery' ? selected.rows[selected.index].footprint : null
+      : selected?.kind === 'imagery' ? selected.rows[selected.index].footprint
+      : selected?.kind === 'air' ? { type: 'Point', coordinates: [selected.row.longitude, selected.row.latitude] } : null
     src.setData(geom ? { type: 'Feature', geometry: geom, properties: {} } : empty)
   }, [selected])
 
@@ -250,16 +282,43 @@ export default function MapView() {
     }
   }
 
+  async function loadAirLayer() {
+    const m = map.current
+    if (!m) return
+    try {
+      const data = await api.get('/air-quality/?latest=true&limit=100')
+      airRows.current = data
+      const geojson = {
+        type: 'FeatureCollection',
+        features: data.map((s, i) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.longitude, s.latitude] }, properties: { i, aqi: s.aqi } })),
+      }
+      if (m.getSource('air')) {
+        m.getSource('air').setData(geojson)
+      } else {
+        m.addSource('air', { type: 'geojson', data: geojson })
+        m.addLayer({ id: 'air-points', type: 'circle', source: 'air',
+          paint: {
+            'circle-radius': 11,
+            'circle-color': ['match', ['get', 'aqi'], 1, AQI_COLORS[1], 2, AQI_COLORS[2], 3, AQI_COLORS[3], 4, AQI_COLORS[4], AQI_COLORS[5]],
+            'circle-opacity': 0.9, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2,
+          } }, 'selected-fill')
+      }
+    } catch {
+      setStatus('Air quality unavailable')
+    }
+  }
+
+  const LOADERS = { vector: loadVectorLayer, imagery: loadImageryLayer, air: loadAirLayer }
+
   function toggleLayer(name) {
     const next = !layers[name]
     setLayers(l => ({ ...l, [name]: next }))
     const m = map.current
     if (!m) return
     const vis = next ? 'visible' : 'none'
-    const ids = name === 'vector' ? ['vector-points', 'vector-lines'] : ['imagery-fills', 'imagery-outlines']
-    ids.forEach(id => m.getLayer(id) && m.setLayoutProperty(id, 'visibility', vis))
-    if (!next && selected?.kind === (name === 'vector' ? 'vector' : 'imagery')) setSelected(null)
-    if (next) (name === 'vector' ? loadVectorLayer : loadImageryLayer)()
+    LAYER_IDS[name].forEach(id => m.getLayer(id) && m.setLayoutProperty(id, 'visibility', vis))
+    if (!next && selected?.kind === name) setSelected(null)
+    if (next) LOADERS[name]()
   }
 
   return (
@@ -275,6 +334,11 @@ export default function MapView() {
           <span className="w-2.5 h-2.5 rounded-sm bg-amber-400" />
           <span>Satellite footprints</span>
         </label>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={layers.air} onChange={() => toggleLayer('air')} />
+          <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'linear-gradient(90deg,#22c55e,#eab308,#ef4444)' }} />
+          <span>Air quality (AQI)</span>
+        </label>
         {status && <span className="ml-auto text-gray-600 text-xs">{status}</span>}
       </div>
       <div className="relative flex-1 min-h-0">
@@ -284,14 +348,14 @@ export default function MapView() {
           <aside className="absolute top-3 left-3 bottom-3 w-80 max-w-[calc(100%-1.5rem)] bg-white rounded-xl shadow-xl border border-gray-200 flex flex-col z-10">
             <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                {selected.kind === 'vector' ? 'OSM feature' : 'Sentinel-2 scene'}
+                {{ vector: 'OSM feature', imagery: 'Sentinel-2 scene', air: 'Air quality station' }[selected.kind]}
               </span>
               <button onClick={() => setSelected(null)} aria-label="Close details" className="text-gray-400 hover:text-gray-900 text-xl leading-none">×</button>
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-3">
-              {selected.kind === 'vector'
-                ? <VectorDetail f={selected.row} />
-                : <ImageryDetail scenes={selected.rows} index={selected.index} onPick={i => setSelected(s => ({ ...s, index: i }))} />}
+              {selected.kind === 'vector' && <VectorDetail f={selected.row} />}
+              {selected.kind === 'air' && <AirDetail s={selected.row} />}
+              {selected.kind === 'imagery' && <ImageryDetail scenes={selected.rows} index={selected.index} onPick={i => setSelected(s => ({ ...s, index: i }))} />}
             </div>
           </aside>
         )}

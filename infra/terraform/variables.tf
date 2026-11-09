@@ -82,5 +82,5 @@ variable "monthly_budget_usd" {
 variable "bootstrap_sql_ref" {
   description = "Git branch or commit whose scripts/init_postgis.sql the db-bootstrap task runs"
   type        = string
-  default     = "development"
+  default     = "main"
 }

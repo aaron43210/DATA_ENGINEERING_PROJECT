@@ -29,6 +29,7 @@ def test_scoped_key_only_reaches_its_product():
 
 def test_key_create_rejects_unknown_scope_and_expiry():
     assert KeyCreate(name="app").scope == "all"
+    assert KeyCreate(name="app", scope="live_air_quality").scope == "live_air_quality"
     assert KeyCreate(name="app", expires_in_days=None).expires_in_days is None
     with pytest.raises(ValidationError):
         KeyCreate(name="app", scope="iot_sensor_stream")

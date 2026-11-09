@@ -5,10 +5,11 @@ import QuotaBar from '../components/QuotaBar.jsx'
 import KeyCreateModal from '../components/KeyCreateModal.jsx'
 
 const SCOPES = {
-  all: { label: 'All products', hint: 'Satellite, OSM and weather with one key', badge: 'bg-gray-900 text-white' },
+  all: { label: 'All products', hint: 'Satellite, OSM, weather and air quality with one key', badge: 'bg-gray-900 text-white' },
   satellite_imagery: { label: 'Satellite Imagery', hint: '/imagery', badge: 'bg-amber-100 text-amber-800' },
   osm_vector_product: { label: 'OSM Vector Infrastructure', hint: '/vector/features', badge: 'bg-blue-100 text-blue-800' },
   live_weather_stream: { label: 'Live Weather Stream', hint: '/weather', badge: 'bg-emerald-100 text-emerald-800' },
+  live_air_quality: { label: 'Live Air Quality', hint: '/air-quality', badge: 'bg-violet-100 text-violet-800' },
 }
 
 const EXPIRY = [

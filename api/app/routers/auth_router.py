@@ -65,7 +65,11 @@ class GoogleCredential(BaseModel):
 class KeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scope: Literal[
-        "all", "satellite_imagery", "osm_vector_product", "live_weather_stream"
+        "all",
+        "satellite_imagery",
+        "osm_vector_product",
+        "live_weather_stream",
+        "live_air_quality",
     ] = "all"
     expires_in_days: Optional[Literal[7, 30, 90, 365]] = 30  # None = never expires
 

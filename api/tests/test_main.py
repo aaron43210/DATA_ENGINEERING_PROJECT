@@ -55,7 +55,52 @@ def test_only_rest_routes_exposed():
         "/weather/",
         "/sensors/",
         "/vector/features",
+        "/air-quality/",
     } <= paths
+
+
+def test_air_quality_latest_per_station():
+    row = {
+        "station_id": "WX_COK",
+        "city_name": "Kochi",
+        "event_time": "2026-11-09 10:00:00+00",
+        "aqi": 3,
+        "aqi_label": "Moderate",
+        "pm2_5": 31.2,
+        "pm10": 48.0,
+        "no2": None,
+        "o3": 60.1,
+        "so2": 4.0,
+        "co": 310.5,
+        "nh3": 1.2,
+        "no": 0.1,
+        "latitude": 9.9312,
+        "longitude": 76.2673,
+    }
+    seen = []
+
+    class AirDB:
+        async def fetch(self, query, *args):
+            seen.append((query, args))
+            return [row]
+
+    async def air_db():
+        yield AirDB()
+
+    app.dependency_overrides[get_db] = air_db
+    try:
+        response = client.get("/air-quality/?latest=true&limit=5", headers=SESSION)
+        plain = client.get("/air-quality?station_id=WX_COK", headers=SESSION)
+    finally:
+        app.dependency_overrides[get_db] = override_get_db
+
+    assert response.status_code == 200
+    assert response.json() == [row]
+    assert "DISTINCT ON (station_id)" in seen[0][0]
+    assert seen[0][1] == (None, 5, 0)
+    assert plain.status_code == 200
+    assert "DISTINCT ON" not in seen[1][0]
+    assert seen[1][1] == ("WX_COK", 100, 0)
 
 
 def test_datasets_catalog_allows_product_without_rest_port():

@@ -1,6 +1,37 @@
 from datetime import datetime, timezone
 
-from ingest import osm_row, satellite_row, weather_row
+from ingest import air_quality_row, osm_row, satellite_row, weather_row
+
+
+def test_air_quality_row_maps_aqi_and_components():
+    station = {"station_id": "WX_COK", "city_name": "Kochi", "lat": 9.9, "lon": 76.2}
+    reading = {
+        "list": [
+            {
+                "dt": 0,
+                "main": {"aqi": 2},
+                "components": {"pm2_5": 12.5, "pm10": 20.0, "co": 250.3},
+            }
+        ]
+    }
+
+    assert air_quality_row(station, reading) == (
+        "WX_COK",
+        "Kochi",
+        datetime(1970, 1, 1, tzinfo=timezone.utc),
+        9.9,
+        76.2,
+        2,
+        12.5,
+        20.0,
+        None,
+        None,
+        None,
+        250.3,
+        None,
+        None,
+    )
+    assert air_quality_row(station, {"list": []}) is None
 
 
 def test_osm_row_handles_points_centers_and_lines():
