@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client.js'
 
 // MapLibre resolves its worker next to its own module URL, which Vite never emits.
@@ -120,7 +121,7 @@ function ImageryDetail({ scenes, index, onPick }) {
       {p['s2:water_percentage'] != null && <Row label="Water">{pct(p['s2:water_percentage'])}</Row>}
       {p['s2:nodata_pixel_percentage'] != null && <Row label="No-data pixels">{pct(p['s2:nodata_pixel_percentage'])}</Row>}
       <Row label="Bounds (W,S,E,N)">{[w, so, e, n].map(v => v.toFixed(3)).join(', ')}</Row>
-      <a className="inline-block mt-4 text-sm text-blue-600 hover:underline" target="_blank" rel="noreferrer" href={STAC_ITEM + s.scene_id}>Full STAC metadata ↗</a>
+      <Link className="inline-block mt-4 text-sm text-blue-600 hover:underline" to={`/scene/${s.scene_id}`}>View full metadata →</Link>
     </>
   )
 }
