@@ -91,16 +91,28 @@ def test_air_quality_latest_per_station():
     try:
         response = client.get("/air-quality/?latest=true&limit=5", headers=SESSION)
         plain = client.get("/air-quality?station_id=WX_COK", headers=SESSION)
+        ranged = client.get(
+            "/air-quality/?from_time=2026-11-08T00:00:00Z&to_time=2026-11-09T00:00:00Z",
+            headers=SESSION,
+        )
+        bad = client.get("/air-quality/?from_time=yesterday", headers=SESSION)
     finally:
         app.dependency_overrides[get_db] = override_get_db
 
     assert response.status_code == 200
     assert response.json() == [row]
     assert "DISTINCT ON (station_id)" in seen[0][0]
-    assert seen[0][1] == (None, 5, 0)
+    assert seen[0][1] == (None, None, None, 5, 0)
     assert plain.status_code == 200
     assert "DISTINCT ON" not in seen[1][0]
-    assert seen[1][1] == ("WX_COK", 100, 0)
+    assert seen[1][1] == ("WX_COK", None, None, 100, 0)
+    assert ranged.status_code == 200
+    _, start, end, _, _ = seen[2][1]
+    assert (start.isoformat(), end.isoformat()) == (
+        "2026-11-08T00:00:00+00:00",
+        "2026-11-09T00:00:00+00:00",
+    )
+    assert bad.status_code == 422
 
 
 def test_datasets_catalog_allows_product_without_rest_port():
@@ -108,7 +120,6 @@ def test_datasets_catalog_allows_product_without_rest_port():
         "product_id": "climate_spatial_mart",
         "name": "Spatial climate mart",
         "domain": "Environmental Intelligence",
-        "owner_team": "Angel Team",
         "description": "One row per OSM feature",
         "sla_freshness_hours": 24,
         "output_port_rest": None,
