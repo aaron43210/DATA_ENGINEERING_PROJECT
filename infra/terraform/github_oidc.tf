@@ -5,6 +5,12 @@ variable "github_repo" {
   default     = "aaron43210/DATA_ENGINEERING_PROJECT"
 }
 
+variable "github_oidc_sub_prefix" {
+  description = "Subject prefix GitHub sends when the repo uses immutable OIDC subjects (gh api repos/OWNER/REPO/actions/oidc/customization/sub)"
+  type        = string
+  default     = "repo:aaron43210@225593939/DATA_ENGINEERING_PROJECT@1398503048"
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
@@ -21,7 +27,11 @@ resource "aws_iam_role" "github_deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:environment:production"
+          # Both subject formats: classic owner/name and GitHub's immutable owner@id/name@id.
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:${var.github_repo}:environment:production",
+            "${var.github_oidc_sub_prefix}:environment:production",
+          ]
         }
       }
     }]
