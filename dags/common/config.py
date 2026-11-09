@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 
 BRONZE_BUCKET = os.environ.get("BUCKET_BRONZE", "bronze")
 
+# The 5 Kerala stations shared by the weather and air quality DAGs, the live
+# weather producer and the API, so every source joins on station_id.
+KERALA_STATIONS = [
+    {
+        "name": "Thiruvananthapuram",
+        "lat": 8.5241,
+        "lon": 76.9366,
+        "station_id": "WX_TVM",
+    },
+    {"name": "Kochi", "lat": 9.9312, "lon": 76.2673, "station_id": "WX_COK"},
+    {"name": "Kozhikode", "lat": 11.2588, "lon": 75.7804, "station_id": "WX_CCJ"},
+    {"name": "Thrissur", "lat": 10.5276, "lon": 76.2144, "station_id": "WX_TCR"},
+    {"name": "Kollam", "lat": 8.8932, "lon": 76.6141, "station_id": "WX_QLN"},
+]
+
 
 def require_env(name: str) -> str:
     """Return env var ``name`` or raise. No secret defaults in source."""
@@ -109,6 +124,7 @@ BASE_DEFAULT_ARGS = {
 BRONZE_SENTINEL2 = Dataset(f"s3://{BRONZE_BUCKET}/source=sentinel-2")
 BRONZE_OSM = Dataset(f"s3://{BRONZE_BUCKET}/source=osm")
 BRONZE_WEATHER = Dataset(f"s3://{BRONZE_BUCKET}/source=weather")
+BRONZE_AIR_QUALITY = Dataset(f"s3://{BRONZE_BUCKET}/source=air_quality")
 
 # Loaded into PostGIS and past the quality gate: safe for dbt to read.
 POSTGIS_OSM = Dataset("postgres://postgres/geoplatform/public/vector_features")
