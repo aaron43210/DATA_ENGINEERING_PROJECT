@@ -142,3 +142,47 @@ resource "aws_eip" "pipeline" {
   domain   = "vpc"
   tags     = { Name = "${var.app_name}-pipeline" }
 }
+
+# Off 01:00-07:00 India time to cut the EC2 bill by a quarter. Containers restart on
+# boot; DAG runs missed overnight run once at start (catchup=False). The AWS ingest
+# jobs keep weather and air quality fresh on the website meanwhile.
+resource "aws_iam_role" "pipeline_scheduler" {
+  name = "${var.app_name}-pipeline-scheduler"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "scheduler.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "pipeline_scheduler" {
+  name = "start-stop-pipeline"
+  role = aws_iam_role.pipeline_scheduler.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ec2:StartInstances", "ec2:StopInstances"]
+      Resource = aws_instance.pipeline.arn
+    }]
+  })
+}
+
+resource "aws_scheduler_schedule" "pipeline" {
+  for_each = {
+    start = { cron = var.pipeline_start_cron, action = "startInstances" }
+    stop  = { cron = var.pipeline_stop_cron, action = "stopInstances" }
+  }
+  name                         = "${var.app_name}-pipeline-${each.key}"
+  schedule_expression          = each.value.cron
+  schedule_expression_timezone = "Asia/Kolkata"
+  flexible_time_window { mode = "OFF" }
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ec2:${each.value.action}"
+    role_arn = aws_iam_role.pipeline_scheduler.arn
+    input    = jsonencode({ InstanceIds = [aws_instance.pipeline.id] })
+  }
+}

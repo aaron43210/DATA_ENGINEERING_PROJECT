@@ -106,3 +106,15 @@ variable "pipeline_repo_url" {
   type        = string
   default     = "https://github.com/aaron43210/DATA_ENGINEERING_PROJECT.git"
 }
+
+variable "pipeline_start_cron" {
+  description = "When the pipeline host starts, India time (Asia/Kolkata)"
+  type        = string
+  default     = "cron(0 7 * * ? *)"
+}
+
+variable "pipeline_stop_cron" {
+  description = "When the pipeline host stops, India time (Asia/Kolkata)"
+  type        = string
+  default     = "cron(0 1 * * ? *)"
+}
