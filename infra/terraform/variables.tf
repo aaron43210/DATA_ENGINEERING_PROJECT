@@ -124,3 +124,9 @@ variable "pipeline_running" {
   type        = bool
   default     = false
 }
+
+variable "pipeline_end_date" {
+  description = "Last moment (RFC 3339, UTC) the daily start/stop runs; the host stays stopped after its final stop. Empty = no end"
+  type        = string
+  default     = ""
+}

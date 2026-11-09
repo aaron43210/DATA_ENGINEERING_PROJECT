@@ -180,6 +180,7 @@ resource "aws_scheduler_schedule" "pipeline" {
   schedule_expression          = each.value.cron
   schedule_expression_timezone = "Asia/Kolkata"
   state                        = var.pipeline_running ? "ENABLED" : "DISABLED"
+  end_date                     = var.pipeline_end_date != "" ? var.pipeline_end_date : null
   flexible_time_window { mode = "OFF" }
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ec2:${each.value.action}"
