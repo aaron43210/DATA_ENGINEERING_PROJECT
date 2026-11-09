@@ -1,0 +1,94 @@
+# EC2 overlay: RDS replaces the postgres container and S3 replaces MinIO.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.aws.yml \
+#     --profile weather --profile monitoring up -d --build
+#
+# Credentials for S3 come from the instance role (no keys). Postgres and MinIO,
+# and the local API/frontend (ECS and CloudFront serve those) move to the
+# `local` profile so they do not start. Needs Compose 2.24.4+.
+
+services:
+
+  postgres:
+    profiles: [local]
+  minio:
+    profiles: [local]
+  minio-setup:
+    profiles: [local]
+  api:
+    profiles: [local]
+  frontend:
+    profiles: [local]
+
+  # Airflow metadata role + database on RDS (idempotent).
+  airflow-db-init:
+    image: postgres:16-alpine
+    container_name: geoplatform-airflow-db-init
+    entrypoint: ["bash", "/init_airflow_db.sh"]
+    environment:
+      PGHOST: ${POSTGRES_HOST:?set to the RDS hostname}
+      PGSSLMODE: require
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:-geoplatform}
+      POSTGRES_DB: ${POSTGRES_DB:-geoplatform}
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-airflow}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:-airflow}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set in .env}
+    volumes:
+      - ./scripts/init_airflow_db.sh:/init_airflow_db.sh:ro
+    networks:
+      - geoplatform-net
+
+  airflow-init:
+    environment: &airflow-aws-env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:?set in .env}@${POSTGRES_HOST:?set to the RDS hostname}:5432/${AIRFLOW_DB_NAME:-airflow}?sslmode=require
+      POSTGRES_HOST: ${POSTGRES_HOST:?set to the RDS hostname}
+      # Every DAG runs on its own schedule from the first boot.
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      # db.t3.micro allows ~80 connections, shared with the API, Flink and dbt.
+      AIRFLOW__CORE__PARALLELISM: "8"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: "2"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: "3"
+      AIRFLOW__WEBSERVER__WORKERS: "2"
+      AWS_ENDPOINT_URL_S3: !reset null
+      AWS_ACCESS_KEY_ID: !reset null
+      AWS_SECRET_ACCESS_KEY: !reset null
+    depends_on: !override
+      airflow-db-init:
+        condition: service_completed_successfully
+
+  airflow-webserver:
+    environment: *airflow-aws-env
+
+  airflow-scheduler:
+    environment: *airflow-aws-env
+
+  iceberg-rest:
+    environment:
+      CATALOG_S3_ENDPOINT: !reset null
+      CATALOG_S3_PATH__STYLE__ACCESS: !reset null
+      AWS_ACCESS_KEY_ID: !reset null
+      AWS_SECRET_ACCESS_KEY: !reset null
+      AWS_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    depends_on: !reset {}
+
+  flink-jobmanager:
+    environment: &flink-aws-env
+      POSTGRES_HOST: ${POSTGRES_HOST:?set to the RDS hostname}
+
+  flink-taskmanager:
+    environment: *flink-aws-env
+
+  flink-job-submit:
+    environment: *flink-aws-env
+    depends_on: !override
+      redpanda-topics:
+        condition: service_completed_successfully
+      flink-jobmanager:
+        condition: service_healthy
+      flink-taskmanager:
+        condition: service_started
+
+  prometheus:
+    volumes: !override
+      - ./monitoring/prometheus.aws.yml:/etc/prometheus/prometheus.yml:ro
