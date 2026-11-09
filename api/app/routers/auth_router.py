@@ -4,7 +4,9 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import jwt
@@ -45,7 +47,9 @@ class GoogleCredential(BaseModel):
 
 
 class KeyCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
+    scope: Literal["all", "satellite_imagery", "osm_vector_product", "live_weather_stream"] = "all"
+    expires_in_days: Optional[Literal[7, 30, 90, 365]] = 30  # None = never expires
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -90,7 +94,8 @@ async def list_keys(db=Depends(get_db), user: dict = Depends(verify_access)):
     rows = await db.fetch(
         """
         SELECT id, key_prefix, name, quota_day, calls_today,
-               quota_reset_at, is_active, last_used_at, created_at
+               quota_reset_at, is_active, last_used_at, created_at,
+               scope, expires_at
         FROM api_keys
         WHERE user_id = (SELECT id FROM api_users WHERE email = $1)
         ORDER BY created_at DESC
@@ -105,22 +110,31 @@ async def create_key(
     body: KeyCreate, db=Depends(get_db), user: dict = Depends(verify_access)
 ):
     """Generate a new API key. Raw key returned exactly once."""
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
+        if body.expires_in_days
+        else None
+    )
     raw_key = secrets.token_urlsafe(32)
     prefix = raw_key[:8]
     key_hash = _sha256(raw_key)
 
     await db.execute(
         """
-        INSERT INTO api_keys (user_id, key_prefix, key_hash, name)
-        VALUES ((SELECT id FROM api_users WHERE email = $1), $2, $3, $4)
+        INSERT INTO api_keys (user_id, key_prefix, key_hash, name, scope, expires_at)
+        VALUES ((SELECT id FROM api_users WHERE email = $1), $2, $3, $4, $5, $6)
         """,
         user["user"],
         prefix,
         key_hash,
         body.name,
+        body.scope,
+        expires_at,
     )
     return {
         "key": raw_key,
+        "scope": body.scope,
+        "expires_at": expires_at,
         "warning": "Store this now. It will not be shown again.",
     }
 

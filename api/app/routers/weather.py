@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from typing import Optional, List
 from pydantic import BaseModel
 from app.db.postgis import get_db
-from app.auth import verify_access, mask_pii
+from app.auth import require_scope, mask_pii
 
 router = APIRouter(prefix="/weather", tags=["Weather"])
 
@@ -27,9 +27,10 @@ class WeatherRecord(BaseModel):
 async def get_weather(
     station_id: Optional[str] = Query(default=None),
     limit: int = Query(default=100, le=1000),
+    offset: int = Query(default=0, ge=0),
     anomalies_only: bool = Query(default=False),
     db=Depends(get_db),
-    user_info: dict = Depends(verify_access),
+    user_info: dict = Depends(require_scope("live_weather_stream")),
 ):
     """Live weather stream observations (from Flink-processed Redpanda stream)."""
     conditions = ["1=1"]
@@ -42,7 +43,7 @@ async def get_weather(
     if anomalies_only:
         conditions.append("is_anomaly = TRUE")
 
-    args.append(limit)
+    args.extend([limit, offset])
     where = " AND ".join(conditions)
     query = f"""
         SELECT station_id, city_name, event_time::text, temperature_c,
@@ -50,7 +51,7 @@ async def get_weather(
                weather_condition, quality_flag, is_anomaly, latitude, longitude
         FROM weather_stream_observations
         WHERE {where}
-        ORDER BY event_time DESC LIMIT ${len(args)}
+        ORDER BY event_time DESC LIMIT ${len(args) - 1} OFFSET ${len(args)}
     """
     records = await db.fetch(query, *args)
     results = []

@@ -8,18 +8,18 @@ export default function QuotaBar({ callsToday, quotaDay }) {
 
   return (
     <div className="w-full">
-      <div className="flex justify-between text-xs text-gray-400 mb-1">
+      <div className="flex justify-between text-xs text-gray-600 mb-1">
         <span>{callsToday} / {quotaDay} calls</span>
         {exhausted
-          ? <span className="text-red-400 font-medium">Exhausted — resets tomorrow</span>
+          ? <span className="text-red-600 font-medium">Exhausted — resets tomorrow</span>
           : pct > 80
-            ? <span className="text-red-400">{pct.toFixed(0)}%</span>
+            ? <span className="text-red-600">{pct.toFixed(0)}%</span>
             : pct >= 60
-              ? <span className="text-amber-400">{pct.toFixed(0)}%</span>
+              ? <span className="text-amber-600">{pct.toFixed(0)}%</span>
               : <span>{pct.toFixed(0)}%</span>
         }
       </div>
-      <div className="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden">
+      <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
     </div>

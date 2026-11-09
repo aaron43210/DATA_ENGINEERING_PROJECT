@@ -2,7 +2,7 @@ import hashlib
 import logging
 import os
 
-from fastapi import HTTPException, Request, Security
+from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 
@@ -54,7 +54,8 @@ async def _verify_db_api_key(api_key: str, request: Request) -> dict:
         row = await db.fetchrow(
             """
             SELECT k.id, k.user_id, k.is_active, k.quota_day,
-                   k.calls_today, k.quota_reset_at,
+                   k.calls_today, k.quota_reset_at, k.scope,
+                   k.expires_at IS NOT NULL AND k.expires_at <= now() AS expired,
                    u.email, u.role
             FROM api_keys k
             JOIN api_users u ON u.id = k.user_id
@@ -64,6 +65,8 @@ async def _verify_db_api_key(api_key: str, request: Request) -> dict:
         )
         if not row or not row["is_active"]:
             raise HTTPException(status_code=401, detail="Invalid or inactive API key")
+        if row["expired"]:
+            raise HTTPException(status_code=401, detail="API key expired")
 
         from datetime import date
 
@@ -90,6 +93,7 @@ async def _verify_db_api_key(api_key: str, request: Request) -> dict:
         "user": row["email"],
         "role": row["role"],
         "privileged": row["role"] == "admin",
+        "scope": row["scope"],
     }
 
 
@@ -128,3 +132,18 @@ async def verify_access(
             raise HTTPException(status_code=401, detail="Invalid token")
 
     raise HTTPException(status_code=401, detail="No authentication provided")
+
+
+def require_scope(product: str):
+    """Dependency: like verify_access, but the API key must cover `product`.
+    Web sessions (JWT) and the legacy env key have no scope and see everything."""
+
+    async def check(user: dict = Depends(verify_access)) -> dict:
+        scope = user.get("scope", "all")
+        if scope not in ("all", product):
+            raise HTTPException(
+                status_code=403, detail=f"This API key is limited to {scope}"
+            )
+        return user
+
+    return check

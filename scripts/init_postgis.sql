@@ -316,5 +316,9 @@ CREATE TABLE IF NOT EXISTS public.api_keys (
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 
+-- scope: 'all' or one data product id; expires_at NULL = never expires
+ALTER TABLE public.api_keys ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'all';
+ALTER TABLE public.api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON public.api_keys (key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON public.api_keys (user_id);
