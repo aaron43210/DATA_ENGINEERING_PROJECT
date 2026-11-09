@@ -3,7 +3,7 @@ import os
 
 import time
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Histogram, make_asgi_app
 
@@ -51,9 +51,9 @@ REQUEST_LATENCY = Histogram(
 async def record_metrics(request, call_next):
     t = time.time()
     response = await call_next(request)
-    REQUEST_LATENCY.labels(request.method, request.url.path, response.status_code).observe(
-        time.time() - t
-    )
+    REQUEST_LATENCY.labels(
+        request.method, request.url.path, response.status_code
+    ).observe(time.time() - t)
     return response
 
 

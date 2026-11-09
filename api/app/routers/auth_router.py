@@ -3,7 +3,7 @@ import logging
 import os
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -22,6 +22,7 @@ router = APIRouter(tags=["auth"])
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -38,6 +39,7 @@ def _make_jwt(user_id: int, email: str, role: str) -> str:
 
 # ── schemas ───────────────────────────────────────────────────────────────────
 
+
 class GoogleCredential(BaseModel):
     credential: str
 
@@ -47,6 +49,7 @@ class KeyCreate(BaseModel):
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.post("/auth/google")
 async def google_auth(body: GoogleCredential, db=Depends(get_db)):
@@ -73,7 +76,9 @@ async def google_auth(body: GoogleCredential, db=Depends(get_db)):
         ON CONFLICT (google_sub) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name
         RETURNING id, role
         """,
-        google_sub, email, name,
+        google_sub,
+        email,
+        name,
     )
     token = _make_jwt(row["id"], email, row["role"])
     return {"token": token, "user": {"email": email, "name": name, "role": row["role"]}}
@@ -96,7 +101,9 @@ async def list_keys(db=Depends(get_db), user: dict = Depends(verify_access)):
 
 
 @router.post("/keys", status_code=201)
-async def create_key(body: KeyCreate, db=Depends(get_db), user: dict = Depends(verify_access)):
+async def create_key(
+    body: KeyCreate, db=Depends(get_db), user: dict = Depends(verify_access)
+):
     """Generate a new API key. Raw key returned exactly once."""
     raw_key = secrets.token_urlsafe(32)
     prefix = raw_key[:8]
@@ -107,7 +114,10 @@ async def create_key(body: KeyCreate, db=Depends(get_db), user: dict = Depends(v
         INSERT INTO api_keys (user_id, key_prefix, key_hash, name)
         VALUES ((SELECT id FROM api_users WHERE email = $1), $2, $3, $4)
         """,
-        user["user"], prefix, key_hash, body.name,
+        user["user"],
+        prefix,
+        key_hash,
+        body.name,
     )
     return {
         "key": raw_key,
@@ -116,7 +126,9 @@ async def create_key(body: KeyCreate, db=Depends(get_db), user: dict = Depends(v
 
 
 @router.delete("/keys/{key_prefix}", status_code=204)
-async def revoke_key(key_prefix: str, db=Depends(get_db), user: dict = Depends(verify_access)):
+async def revoke_key(
+    key_prefix: str, db=Depends(get_db), user: dict = Depends(verify_access)
+):
     """Deactivate a key. Only the owner can revoke their own key."""
     result = await db.execute(
         """
@@ -125,7 +137,8 @@ async def revoke_key(key_prefix: str, db=Depends(get_db), user: dict = Depends(v
           AND user_id = (SELECT id FROM api_users WHERE email = $2)
           AND is_active = TRUE
         """,
-        key_prefix, user["user"],
+        key_prefix,
+        user["user"],
     )
     if result == "UPDATE 0":
         raise HTTPException(status_code=404, detail="Key not found or already revoked")

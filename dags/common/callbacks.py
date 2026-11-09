@@ -1,4 +1,5 @@
 """Airflow failure callback: sends email via SMTP_SSL if SMTP host is configured."""
+
 from __future__ import annotations
 
 import logging
@@ -12,7 +13,9 @@ logger = logging.getLogger(__name__)
 def notify_on_failure(context: dict) -> None:
     smtp_host = os.environ.get("AIRFLOW__SMTP__SMTP_HOST")
     if not smtp_host:
-        logger.warning("notify_on_failure: AIRFLOW__SMTP__SMTP_HOST not set, skipping email")
+        logger.warning(
+            "notify_on_failure: AIRFLOW__SMTP__SMTP_HOST not set, skipping email"
+        )
         return
 
     dag_id = getattr(context.get("dag"), "dag_id", "?")
@@ -30,7 +33,9 @@ def notify_on_failure(context: dict) -> None:
         f"Exception: {exception}\n"
     )
 
-    mail_from = os.environ.get("AIRFLOW__SMTP__SMTP_MAIL_FROM", "airflow@geoplatform.local")
+    mail_from = os.environ.get(
+        "AIRFLOW__SMTP__SMTP_MAIL_FROM", "airflow@geoplatform.local"
+    )
     mail_to = os.environ.get("AIRFLOW_ALERT_EMAIL", mail_from)
     smtp_port = int(os.environ.get("AIRFLOW__SMTP__SMTP_PORT", "465"))
     smtp_user = os.environ.get("AIRFLOW__SMTP__SMTP_USER", "")

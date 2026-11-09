@@ -91,6 +91,7 @@ def _failure_callback(context):
     """Log the failure, then send email if SMTP is configured."""
     alert_on_failure(context)
     from common.callbacks import notify_on_failure
+
     notify_on_failure(context)
 
 

@@ -66,13 +66,15 @@ async def _verify_db_api_key(api_key: str, request: Request) -> dict:
             raise HTTPException(status_code=401, detail="Invalid or inactive API key")
 
         from datetime import date
+
         today = date.today()
         calls = row["calls_today"]
         if row["quota_reset_at"] < today:
             calls = 0
             await db.execute(
                 "UPDATE api_keys SET calls_today=0, quota_reset_at=$1 WHERE id=$2",
-                today, row["id"],
+                today,
+                row["id"],
             )
 
         if calls >= row["quota_day"]:
@@ -80,7 +82,8 @@ async def _verify_db_api_key(api_key: str, request: Request) -> dict:
 
         await db.execute(
             "UPDATE api_keys SET calls_today=$1, last_used_at=now() WHERE id=$2",
-            calls + 1, row["id"],
+            calls + 1,
+            row["id"],
         )
 
     return {
