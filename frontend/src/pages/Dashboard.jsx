@@ -55,7 +55,7 @@ export default function Dashboard() {
                     <tr key={p.product_id} className="border-t border-gray-200">
                       <td className="px-3 py-2"><Link to={`/explore/${p.product_id}`} className="text-blue-600 hover:underline">{p.name}</Link></td>
                       <td className="px-3 py-2 font-mono whitespace-nowrap">GET {s.endpoint}</td>
-                      <td className="px-3 py-2">{s.scope === 'all' ? 'All products' : `All products or ${s.title}`}</td>
+                      <td className="px-3 py-2">All products or {s.title}</td>
                     </tr>
                   )
                 })}

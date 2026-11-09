@@ -29,15 +29,12 @@ const ERRORS = [
 
 export default function ApiUsage({ spec }) {
   const url = `${API_BASE_URL}${spec.endpoint}${spec.example}`
-  const scopeText = spec.scope === 'all'
-    ? <>a key with <strong>All products</strong> access</>
-    : <>a key with <strong>All products</strong> or <strong>{spec.title}</strong> access</>
 
   return (
     <section className="mt-10 border-t border-gray-200 pt-8">
       <h3 className="text-lg font-bold mb-1">Access this data with the API</h3>
       <p className="text-sm text-gray-600 mb-5">
-        Send your API key in the <code className="bg-gray-100 px-1 rounded">X-API-Key</code> header. You need {scopeText}.{' '}
+        Send your API key in the <code className="bg-gray-100 px-1 rounded">X-API-Key</code> header. You need a key with <strong>All products</strong> or <strong>{spec.title}</strong> access.{' '}
         <Link to="/keys" className="text-blue-600 hover:underline">Create a key</Link>.
       </p>
 
